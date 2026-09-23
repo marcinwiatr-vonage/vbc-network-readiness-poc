@@ -4,13 +4,13 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 /// The four-byte protocol discriminator present at the start of every frame.
-pub const MAGIC: [u8; 4] = *b"NRP1";
-/// First supported version of the network-readiness packet format.
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const MAGIC: [u8; 4] = [0x4E, 0x52, 0x50, 0x02];
+/// Second version of the wire format; the experimental v1 layout is retired.
+pub const PROTOCOL_VERSION: u8 = 2;
 /// Largest permitted application payload in one UDP frame.
 pub const MAX_PAYLOAD_LENGTH: usize = 1_200;
 
-const HEADER_LENGTH: usize = 40;
+const HEADER_LENGTH: usize = 36;
 const AUTH_TAG_LENGTH: usize = 32;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -42,8 +42,8 @@ impl TryFrom<u8> for Direction {
 pub struct Packet {
     test_id: [u8; 16],
     direction: Direction,
-    sequence_number: u64,
-    monotonic_timestamp_ns: u64,
+    sequence_number: u32,
+    monotonic_timestamp_ns: i64,
     payload: Vec<u8>,
 }
 
@@ -53,8 +53,8 @@ impl Packet {
     pub fn new(
         test_id: [u8; 16],
         direction: Direction,
-        sequence_number: u64,
-        monotonic_timestamp_ns: u64,
+        sequence_number: u32,
+        monotonic_timestamp_ns: i64,
         payload: Vec<u8>,
     ) -> Self {
         Self {
@@ -70,8 +70,8 @@ impl Packet {
     pub fn try_new(
         test_id: [u8; 16],
         direction: Direction,
-        sequence_number: u64,
-        monotonic_timestamp_ns: u64,
+        sequence_number: u32,
+        monotonic_timestamp_ns: i64,
         payload: Vec<u8>,
     ) -> Result<Self, PacketError> {
         if payload.len() > MAX_PAYLOAD_LENGTH {
@@ -112,8 +112,8 @@ impl Packet {
         let mut bytes = Vec::with_capacity(HEADER_LENGTH + self.payload.len() + AUTH_TAG_LENGTH);
         bytes.extend_from_slice(&MAGIC);
         bytes.push(PROTOCOL_VERSION);
-        bytes.push(self.direction as u8);
         bytes.extend_from_slice(&self.test_id);
+        bytes.push(self.direction as u8);
         bytes.extend_from_slice(&self.sequence_number.to_be_bytes());
         bytes.extend_from_slice(&self.monotonic_timestamp_ns.to_be_bytes());
         bytes.extend_from_slice(&(self.payload.len() as u16).to_be_bytes());
@@ -139,15 +139,15 @@ impl Packet {
             return Err(PacketError::UnsupportedVersion(version));
         }
 
-        let direction = Direction::try_from(bytes[5])?;
         let mut test_id = [0_u8; 16];
-        test_id.copy_from_slice(&bytes[6..22]);
+        test_id.copy_from_slice(&bytes[5..21]);
+        let direction = Direction::try_from(bytes[21])?;
         let sequence_number =
-            u64::from_be_bytes(bytes[22..30].try_into().expect("fixed header slice"));
+            u32::from_be_bytes(bytes[22..26].try_into().expect("fixed header slice"));
         let monotonic_timestamp_ns =
-            u64::from_be_bytes(bytes[30..38].try_into().expect("fixed header slice"));
+            i64::from_be_bytes(bytes[26..34].try_into().expect("fixed header slice"));
         let payload_length =
-            u16::from_be_bytes(bytes[38..40].try_into().expect("fixed header slice")) as usize;
+            u16::from_be_bytes(bytes[34..36].try_into().expect("fixed header slice")) as usize;
 
         if payload_length > MAX_PAYLOAD_LENGTH {
             return Err(PacketError::PayloadTooLarge(payload_length));

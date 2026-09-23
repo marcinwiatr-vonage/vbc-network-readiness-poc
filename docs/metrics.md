@@ -1,10 +1,12 @@
 # Metrics Specification
 
-This document defines the terms used in a Network Readiness Probe result. Implementations must not change units, direction semantics or labels without updating this document and associated tests.
+This document defines Network Readiness Probe measurement terms, units, source of truth, and unavailable-value semantics. Implementations must not change labels, direction, units, or algorithms without updating this document and associated fixtures.
 
-## Time base
+## Time base and frame inputs
 
-Use a monotonic clock for packet scheduling, test duration and inter-arrival calculations. Wall-clock UTC is permitted only for report timestamps and session expiry.
+Use a monotonic clock for packet scheduling, test duration, RTT elapsed time, and receive inter-arrival calculations. UTC is allowed only for report timestamps and session expiry. The v1 frame carries an `i64` monotonic send timestamp at offsets 26–33; it is not a synchronized timestamp and cannot establish one-way latency.
+
+Each valid v1 frame has an independent direction and `u32` sequence stream. Only frames that pass fixed-length validation, HMAC verification, session/expiry checks, expected-direction checks, and source-binding checks can contribute to a measurement.
 
 ## Packet accounting
 
@@ -12,55 +14,59 @@ Each direction has an independent monotonically increasing sequence number.
 
 - `packets_sent`: frames deliberately emitted within the measurement window.
 - `packets_received`: valid authenticated frames received within that window.
-- `duplicates`: valid frames with sequence number already observed.
-- `out_of_order`: valid first-seen frames with a sequence lower than the largest first-seen sequence.
-- `missing`: expected sequence numbers absent after a defined reordering grace period.
+- `duplicates`: valid frames whose sequence was already observed.
+- `out_of_order`: valid first-seen frames whose sequence is lower than the greatest first-seen sequence.
+- `missing`: expected sequence numbers absent after the defined reordering grace period.
 
-`loss_pct = 100 * missing / expected_packets`.
+`loss_pct = 100 × missing / expected_packets`.
 
-Do not count malformed, unauthenticated or expired-session datagrams as received frames.
+Do not count malformed, unauthenticated, wrong-direction, expired-session, or out-of-window datagrams as received frames. A zero expected-packet count yields `null`, not `0%`. Sequence-number wraparound semantics require a tested implementation decision before release.
 
-## Directional semantics
+## Directional source of truth
 
-| Direction | Sender | Receiver/observer | Report meaning |
+| Direction | Sender | Receiver / authoritative observer | Report meaning |
 |---|---|---|---|
-| Uplink | Endpoint agent | Regional probe | Quality from endpoint/network towards probe. |
-| Downlink | Regional probe | Endpoint agent | Quality from probe towards endpoint/network. |
+| Uplink (`UL`) | Endpoint agent | Regional probe | Quality from endpoint/network toward the controlled probe. |
+| Downlink (`DL`) | Regional probe | Endpoint agent | Quality from controlled probe toward endpoint/network. |
 
-The probe produces the authoritative uplink packet observation. The agent produces the authoritative downlink observation.
+The probe produces authoritative uplink receipt metrics. The agent produces authoritative downlink receipt metrics. Results must keep both observations distinct; neither direction may be calculated from the other observer.
 
 ## Jitter
 
-MVP jitter is calculated from per-packet receive inter-arrival deltas within one direction. The exact algorithm must be implemented once in a pure function with fixtures.
+MVP jitter is receive inter-arrival variation for valid, first-seen packets in a single direction. For consecutive eligible packets, calculate inter-arrival deltas from the receiver's monotonic clock; derive the documented variation sample in a pure function. Exclude duplicate, malformed, unauthenticated, out-of-window, and unavailable samples consistently.
 
-Report `jitter_ms_p50` and `jitter_ms_p95`; do not describe a percentile as an average. If an RTP-compatible RFC 3550 interarrival-jitter estimate is later used, add a separate field and name it precisely rather than silently replacing this definition.
+Report `jitter_ms_p50` and `jitter_ms_p95`. A percentile is not an average. The report must identify the receiving observer and direction. If a later RTP-compatible RFC 3550 estimator is added, expose it as a separately named field rather than silently replacing this definition.
+
+Use `null` when too few eligible samples exist for the defined percentile calculation.
 
 ## RTT
 
-RTT is the elapsed monotonic time between an acknowledged timestamp request and its corresponding response. Report `rtt_ms_min`, `rtt_ms_mean` and `rtt_ms_p95`.
+RTT is elapsed monotonic time between a timestamp request and its corresponding authenticated response. Report `rtt_ms_min`, `rtt_ms_mean`, and `rtt_ms_p95` with units of milliseconds.
 
-RTT is not one-way latency. The project does not estimate one-way latency without a valid clock-synchronization design.
+RTT is not one-way latency. The project does not estimate one-way latency without a validated clock-synchronization design. If no corresponding response is observed, every RTT aggregate is `null`.
 
 ## Throughput
 
-`throughput_kbps = (received_payload_bytes * 8) / measurement_seconds / 1000`.
+`throughput_kbps = (received_payload_bytes × 8) / measurement_seconds / 1000`.
 
-Report payload throughput separately from wire bitrate. Any later wire-rate estimate must include and document IP/UDP/frame overhead assumptions.
+Report received **payload** throughput separately for uplink and downlink. It excludes the 36-byte frame header, 32-byte HMAC tag, and IP/UDP overhead. Any future wire-rate estimate must be separately named and document all overhead assumptions. A non-positive measurement duration produces `null`.
 
-## Reachability outcomes
+## Reachability and status outcomes
 
-- `COMPLETED`: authenticated bidirectional exchange completed.
-- `UDP_UNREACHABLE_OR_BLOCKED`: no validated probe handshake/response before timeout.
-- `SESSION_REJECTED`: API or probe rejected session/HMAC/expiry.
-- `CANCELLED`: agent was explicitly cancelled.
-- `INTERNAL_ERROR`: implementation failure; include a safe diagnostic code but no secret material.
+| Status | Meaning | Directional metrics |
+|---|---|---|
+| `COMPLETED` | Authenticated bidirectional exchange completed. | Measured values or `null` where a specific calculation lacks samples. |
+| `UDP_UNREACHABLE_OR_BLOCKED` | No validated probe handshake/response arrived before timeout. | Loss, jitter, RTT, and throughput are `null`; it is not 100% loss. |
+| `SESSION_REJECTED` | API or probe rejected session, HMAC, expiry, replay, direction, or source binding. | All measurements are `null`. |
+| `CANCELLED` | Runner explicitly cancelled the agent. | Only values from a completed measurement window may be reported; otherwise `null`. |
+| `INTERNAL_ERROR` | Implementation failure. | Measurements are `null` unless independently completed and explicitly marked safe to retain. |
 
-A reachability failure has no valid loss, jitter or throughput measurement. Values must be `null` rather than zero or a calculated percentage.
+A status label does not replace raw metrics or source attribution. Status thresholds belong to the report layer and are configuration, not protocol truth.
 
 ## Capacity and MOS
 
-No generic capacity or MOS is calculated in MVP.
+MVP calculates neither generic capacity nor MOS.
 
-A future configured-profile capacity estimate must document payload size, packetization interval, transport overhead, total packet rate, duration, impairment threshold and the precise rule used to identify degradation. It must be labelled as an estimate for that named profile.
+A future configured-profile capacity estimate must document payload size, packetization interval, frame/transport-overhead assumptions, total packet rate, duration, impairment thresholds, and exact degradation rule. It must be labelled as an estimate for that named profile.
 
-A future MOS calculation must document codec, packetization, delay and loss impairment assumptions, formula/version and validation. A MOS without those inputs is prohibited.
+A future MOS calculation requires codec, packetization, delay and loss-impairment assumptions, formula/version, and validation. MOS without those inputs is prohibited.

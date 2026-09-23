@@ -1,6 +1,6 @@
 # Network Readiness Probe
 
-> A personal engineering proof of concept for measuring **bidirectional UDP network quality** between an endpoint and a regional probe.
+> A personal, self-hosted engineering proof of concept for measuring **bidirectional UDP network quality** between an endpoint and a project-controlled regional probe.
 
 [![Status: design](https://img.shields.io/badge/status-design-blue)](#project-status)
 [![Language: Rust](https://img.shields.io/badge/language-Rust-DEA584)](#technology-decisions)
@@ -8,42 +8,40 @@
 
 ## Important boundary
 
-This repository is an **independent personal project**. It is not affiliated with, endorsed by, or intended to replace any Vonage product or official readiness test. It must not use Vonage branding, customer data, internal endpoints, SIP credentials, packet captures, or call content.
+This repository is an independent personal project. It uses only infrastructure controlled by this project and must not use customer data, internal endpoints, credentials, packet captures, or call content.
 
-Results are point-in-time measurements between an endpoint and this project’s selected probe. They do not certify a network, validate a third-party platform, guarantee call quality, or replace production-path diagnostics.
+A result is a point-in-time measurement between the runner and the selected controlled probe. It does not certify a network, guarantee call quality, or replace diagnostics of an actual production media path.
 
 ## Problem statement
 
-HTTP/TCP speed tests can show bandwidth and a basic latency result, but they do not provide the evidence needed to diagnose real-time media degradation. Voice and real-time application quality is often determined by conditions that are directional and time-sensitive:
+HTTP/TCP speed tests can show bandwidth and a basic latency result, but they do not provide directional, time-sensitive evidence about real-time media conditions. This project is intended to measure:
 
-- UDP reachability;
-- uplink and downlink loss measured independently;
-- loss bursts and out-of-order packets;
-- jitter distribution, not a single average;
-- RTT under a defined traffic profile;
-- sustained usable throughput rather than a brief HTTP peak.
+- UDP reachability on the configured high-numbered UDP listener;
+- uplink and downlink loss independently;
+- loss bursts, duplicates, and out-of-order packets;
+- jitter percentiles rather than an undefined average;
+- RTT under a defined traffic profile; and
+- sustained received payload throughput independently in each direction.
 
-Network Readiness Probe will run a **bounded, authenticated, full-duplex UDP test** and return support-useful raw evidence alongside carefully scoped interpretation.
+The test is bounded, authenticated, and full duplex. It returns raw evidence with deliberately limited interpretation.
 
 ## Goals
 
-- Build a cross-platform endpoint agent in Rust for Windows, Linux, and macOS.
-- Operate a controlled regional UDP probe, beginning in Frankfurt (`eu-central-1`).
-- Measure UL/DL packet loss, jitter p50/p95, RTT and achieved throughput separately.
-- Produce a VoIP-style report with runner-visible environment metadata, target profile, capacity, directional media metrics and controlled firewall reachability.
-- Make test execution safe: short-lived session credentials, strict rate limits, fixed duration and no UDP reflection behavior.
-- Define all cloud infrastructure in Terraform and make builds/deployment repeatable.
-- Keep the first release focused on diagnostic integrity rather than a polished dashboard.
+- Build a cross-platform Rust endpoint agent for Windows, Linux, and macOS.
+- Operate a controlled regional UDP probe, beginning in Frankfurt (`fra` / `eu-central-1`).
+- Measure directional loss, jitter p50/p95, RTT, and achieved payload throughput.
+- Produce a transparent report with environment metadata, selected profile, directional media metrics, and controlled-endpoint reachability.
+- Make execution safe with short-lived session credentials, strict rate limits, fixed duration, and no UDP reflection behavior.
+- Define permanent cloud infrastructure in Terraform and keep the first release focused on diagnostic integrity.
 
 ## Non-goals for the MVP
 
 - Public production service or customer-support workflow.
-- Claims of vendor- or platform-specific readiness.
-- Third-party SBC, SIP, RTP, media-server, or port scanning.
-- SIP registration or collection of credentials.
+- Network or service certification, vendor-specific claims, or production-path testing.
+- SIP registration, credentials, port scanning, or arbitrary destination probing.
 - A generic UDP echo service.
-- A MOS score before codec, packetization, impairment model and one-way-delay assumptions are explicitly documented.
-- Electron desktop application; the agent should remain a small native Rust binary.
+- MOS before codec, packetization, impairment, and delay assumptions are documented and validated.
+- A desktop browser shell; the agent remains a small native Rust binary.
 
 ## Architecture
 
@@ -51,10 +49,10 @@ Network Readiness Probe will run a **bounded, authenticated, full-duplex UDP tes
 +-------------------------------------+
 | Endpoint agent (Rust CLI)           |
 |-------------------------------------|
-| - requests a one-time test session  |
-| - validates and sends UDP frames    |
-| - receives probe traffic            |
-| - calculates local DL metrics       |
+| - requests a one-time session       |
+| - sends authenticated UDP frames    |
+| - observes downlink frames          |
+| - emits a structured result         |
 +----------------+--------------------+
                  | HTTPS: session + result
                  | UDP: bounded packet train
@@ -62,85 +60,75 @@ Network Readiness Probe will run a **bounded, authenticated, full-duplex UDP tes
 +-------------------------------------+       +------------------------------------+
 | API / session service               |<----->| Regional UDP probe                 |
 |-------------------------------------|       |------------------------------------|
-| - test ID and HMAC issue            |       | - active-session registry          |
+| - issues test ID and HMAC material  |       | - active-session registry          |
 | - expiry and rate limiting          |       | - controlled reverse UDP stream    |
-| - result schema validation          |       | - calculates server-side UL stats  |
+| - result schema validation          |       | - authoritative UL observation     |
 +----------------+--------------------+       +----------------+-------------------+
                  |                                             |
                  +---------------- AWS eu-central-1 -----------+
 ```
 
-Two observers are deliberate. The probe establishes whether agent-originated packets arrived (**uplink**), while the endpoint establishes what it received from the probe (**downlink**). Neither direction is inferred from one observer alone.
+The probe is authoritative for packets received from the agent (**uplink**); the agent is authoritative for packets received from the probe (**downlink**). Neither direction is inferred from the other observer.
+
+## Canonical UDP frame (v2)
+
+The implemented packet codec is the canonical wire contract. All multi-byte fields are big-endian; the timestamp is monotonic-relative and is never UTC.
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0–3 | 4 | Magic `[0x4E, 0x52, 0x50, 0x02]` (`NRP\\x02`) |
+| 4 | 1 | Protocol version `0x02` |
+| 5–20 | 16 | Opaque test ID |
+| 21 | 1 | Direction: `0x01` uplink (agent → probe), `0x02` downlink (probe → agent) |
+| 22–25 | 4 | `u32` sequence number |
+| 26–33 | 8 | `i64` monotonic send timestamp in nanoseconds |
+| 34–35 | 2 | `u16` payload length, 0–1200 bytes |
+| 36… | N | Random payload |
+| 36+N… | 32 | HMAC-SHA256 over every preceding frame byte |
+
+The fixed header is 36 bytes and the HMAC tag is 32 bytes. Valid frames are **68–1268 bytes** inclusive. Decoders reject short frames, invalid magic/version/direction, oversized declared payloads, length mismatches, and invalid HMACs before accepting a packet.
+
+See [the architecture contract](docs/architecture.md#canonical-udp-frame-format-v2) for lifecycle and validation order, and [the metric specification](docs/metrics.md) for result semantics.
 
 ## Measurement model
 
-### Test lifecycle
-
 1. The agent calls `POST /v1/tests` over HTTPS.
-2. The API rate-limits the request and returns a random, single-use `test_id`, expiry, UDP target and per-test HMAC key.
-3. The agent sends an authenticated UDP hello to the selected probe.
-4. The probe starts its reverse stream only if the session is valid. It binds the session to the observed source address and port.
-5. Agent and probe exchange packets for a fixed duration and bounded rate.
-6. The agent posts its result to `POST /v1/results`; the API verifies test ID, expiry and result schema.
+2. The API rate-limits the request and returns a CSPRNG test ID, expiry, exact probe target, and one-time HMAC material.
+3. The agent sends authenticated uplink frames only to that returned target.
+4. After validation, the probe binds the session to the first verified source `IP:port`, records uplink observations, and sends only the configured downlink stream to that bound endpoint.
+5. The agent records downlink observations and RTT, then submits exactly one versioned result to `POST /v1/results`.
+6. The API validates session state, expiry, schema, and ranges; packet payloads are never stored.
 
-### UDP frame
+A failed validated handshake is `UDP_UNREACHABLE_OR_BLOCKED`, not 100% loss and not a fabricated quality measurement.
 
-The wire format must be fixed-length-header binary framing, not JSON per datagram:
+## UDP listener and AWS POC boundary
 
-```text
-magic | protocol_version | direction | test_id | sequence_number |
-monotonic_send_timestamp | payload_length | random_payload | HMAC
-```
+The first POC is private-development and limited proof-of-concept use only. It starts with one controlled listener in Frankfurt and a single documented UDP port: **`10000` or `16384`**. A listener in this high-numbered media-port range is necessary because a successful test on a well-known port does not establish reachability for that path. The security group permits exactly the selected UDP port; UDP terminates directly on the probe Elastic IP rather than through an ALB.
 
-The protocol implementation must reject malformed datagrams before allocating variable-sized payloads, cap payload length, and delete session state after expiry.
+Before a public resource is created:
 
-### Reported metrics
-
-| Metric | Source and definition |
-|---|---|
-| Uplink loss | Missing authenticated sequence numbers as observed by the probe. |
-| Downlink loss | Missing authenticated sequence numbers as observed by the agent. |
-| Jitter | Packet inter-arrival variation per receiving side; report p50 and p95 for both directions. |
-| RTT | Acknowledged timestamp round trip; report min, mean and p95. It is not one-way latency. |
-| Throughput | Received payload bytes over the measured interval, independently for UL and DL. |
-| Reachability | Explicit `UDP_UNREACHABLE_OR_BLOCKED` result when a valid handshake cannot complete. |
-
-A test must never fabricate quality metrics after failed UDP connectivity.
-
-## AWS POC boundary
-
-The project starts in a personal AWS account and is suitable only for private development and limited proof-of-concept use.
-
-Before any public resource is created:
-
-1. Configure an AWS Budget with low monthly thresholds and billing alerts.
-2. Enable root MFA; do not create root access keys.
-3. Create separate least-privilege IAM roles for Terraform and deployment.
-4. Start with one small EC2 instance and one Elastic IP in `eu-central-1`.
-5. Use encrypted EBS and a restrictive security group: HTTPS only when needed, no public SSH (prefer SSM), and exactly one configured UDP test port in the first POC.
-6. Provision only through Terraform and review every `terraform plan` before apply.
-
-An Application Load Balancer does not proxy UDP. In the first POC, UDP terminates directly on the probe’s Elastic IP. API and probe can share an instance initially but remain separate services and trust boundaries.
+1. Configure low AWS Budget thresholds and billing alerts.
+2. Enable root MFA and do not create root access keys.
+3. Use separate least-privilege Terraform and deployment roles.
+4. Use encrypted EBS, no public SSH (use SSM), and restrictive ingress.
+5. Provision only through Terraform after a reviewed `terraform plan`.
 
 ## Security principles
 
-A public UDP listener can become an abuse primitive. These controls are mandatory from the first implementation:
+- No UDP response without a valid, unexpired, single-use session.
+- Per-test HMAC authentication and binding to the first validated endpoint source address and port.
+- Hard ceilings for duration, payload, packet rate, concurrent tests, and session creation.
+- No arbitrary echo, no client-provided UDP destination, and no response to unknown traffic.
+- HTTPS-only control plane; no cloud credentials or long-lived probe secrets in the agent.
+- No packet payload logging; retain only the minimal aggregate result and controlled diagnostics.
 
-- No response without a valid, unexpired, single-use session.
-- Per-test HMAC authentication; bind the session to the first validated endpoint source address and port.
-- Hard caps on test duration, payload size, packet rate, concurrent tests and tests created per source IP.
-- Never echo arbitrary inbound data and never accept a destination address from the client.
-- HTTPS-only control plane; no cloud credentials or long-lived secrets in the agent.
-- Log only session and aggregate test events. Do not log payloads. Retain no customer identity and minimise source-IP handling.
-- Run containers unprivileged, scan dependencies and images in CI, and patch regularly.
-
-See [docs/threat-model.md](docs/threat-model.md) for the security design baseline.
+See [docs/threat-model.md](docs/threat-model.md) for abuse cases, controls, and release gates.
 
 ## Project status
 
-**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, authenticated packet codec and an actual loopback agent↔probe integration test are implemented locally. The test proves one valid full-duplex exchange and that an unknown session receives no UDP response. Security/error-path coverage, an expiring source-bound session registry and a user-facing binary workflow are still outstanding. AWS remains intentionally untouched.
+**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, canonical authenticated packet codec, and loopback agent↔probe integration test exist locally. Current work still needs complete negative-path codec coverage, an expiring source-bound session registry, and a user-facing binary workflow. AWS remains intentionally untouched.
 
-The authoritative delivery sequence is in [ROADMAP.md](ROADMAP.md).
+The authoritative delivery sequence is [ROADMAP.md](ROADMAP.md).
 
 ## Repository layout
 
@@ -168,36 +156,26 @@ The authoritative delivery sequence is in [ROADMAP.md](ROADMAP.md).
 
 | Area | Decision | Rationale |
 |---|---|---|
-| Endpoint/probe/API | Rust | Native cross-platform binaries, predictable UDP handling, memory safety and static release artefacts. |
-| Async runtime | Tokio | Mature async I/O and UDP primitives for agent, probe and API. |
-| HTTP/API | Axum | Small Tokio-native HTTP layer with typed request/response handling. |
-| Data store | SQLite locally; PostgreSQL only when history needs exceed local scope | Avoids premature infrastructure. |
+| Endpoint/probe/API | Rust | Native binaries, predictable UDP handling, and memory safety. |
+| Async runtime | Tokio | UDP and HTTP primitives for the Rust services. |
+| HTTP/API | Axum | Small Tokio-native typed HTTP layer. |
+| Data store | SQLite locally; PostgreSQL later if scope requires | Avoids premature infrastructure. |
 | Compute | EC2 + Elastic IP | Direct UDP endpoint and explicit networking controls. |
 | Infrastructure | Terraform | Reproducible, reviewable cloud state. |
 | Packaging | Docker | Repeatable API/probe deployment; agent remains native. |
-| CI | GitHub Actions | `fmt`, Clippy, tests, dependency audit and Terraform validation. |
+| CI | GitHub Actions | Formatting, linting, tests, dependency audit, and infrastructure validation. |
 
 ## Local developer workflow — target state
 
-The following commands become valid as implementation is added:
-
 ```bash
-# Run unit and integration tests
 cargo test --workspace
-
-# Run static checks
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo audit
-
-# Build binaries
 cargo build --workspace --release
 
-# Start local API and probe after compose configuration is added
+# After local compose configuration exists
 docker compose up --build
-
-# Execute a local test after the agent exists
-./agent --api-url http://127.0.0.1:8080 --region local --duration 30s --json-out result.json
 
 # Validate infrastructure without applying it
 cd infra/terraform
@@ -206,13 +184,9 @@ terraform validate
 terraform plan
 ```
 
-## Roadmap and contribution model
-
-Read [ROADMAP.md](ROADMAP.md) before creating implementation work. The rules for human and AI contributors, including Vonage Codex usage, security boundaries and mandatory test gates, are in [AGENTS.md](AGENTS.md).
-
 ## Contributing and security
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Review [SECURITY.md](SECURITY.md) for private vulnerability reporting and the project’s safe-testing boundary.
+Read [ROADMAP.md](ROADMAP.md) before implementation work. Contributor workflow and mandatory checks are in [CONTRIBUTING.md](CONTRIBUTING.md); safe-testing and vulnerability reporting are in [SECURITY.md](SECURITY.md).
 
 ## License
 
@@ -220,4 +194,4 @@ Copyright 2026 Marcin Wiatr. Licensed under the [Apache License 2.0](LICENSE). S
 
 ## Disclaimer
 
-This project produces diagnostic measurements between its endpoint agent and selected probe only. It is not a certification tool and cannot replace packet capture analysis, application logs, real-time media statistics, or investigation of the actual production call path.
+This project produces diagnostics only for the path between its agent and selected controlled probe. It cannot replace application telemetry, real media statistics, packet captures, or investigation of an actual production path.
