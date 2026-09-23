@@ -1,0 +1,17 @@
+[package]
+name = "probe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "probe"
+path = "src/main.rs"

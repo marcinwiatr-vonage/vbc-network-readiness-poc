@@ -20,10 +20,10 @@ The project is a personal engineering POC. Do not represent it as a Vonage servi
 
 ## Default implementation choices
 
-- **Language:** Go.
-- **Endpoint agent:** Go CLI; no Electron or browser dependency.
-- **Probe:** Go UDP daemon.
-- **API:** Go `net/http` initially.
+- **Language:** Rust.
+- **Endpoint agent:** Rust CLI; no Electron or browser dependency.
+- **Probe:** Tokio-based Rust UDP daemon.
+- **API:** Axum running on Tokio.
 - **Infrastructure:** Terraform; single Frankfurt EC2 POC first.
 - **Storage:** SQLite for local development; defer Postgres until required.
 - **Containers:** Docker for API/probe; agent distributed as native binary.
@@ -47,16 +47,16 @@ For every behavior change:
 1. Write the failing unit or integration test.
 2. Run it and verify it fails for the expected reason.
 3. Implement the smallest safe solution.
-4. Run focused tests, then the full suite with race detection.
+4. Run focused tests, then the full suite and static checks.
 5. Update docs and examples in the same change when behavior is user-visible.
 
-Expected command set once the Go module exists:
+Expected command set once the Rust workspace exists:
 
 ```bash
-gofmt -w .
-go test ./... -race
-go vet ./...
-govulncheck ./...
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo audit
 ```
 
 Never claim a change works if the relevant test/build was not actually run. Report tool failures directly.
@@ -109,9 +109,12 @@ Document the threat, mitigation, test and operational rollback in `docs/threat-m
 ## Documentation rules
 
 - `README.md`: product boundary, architecture and developer entry point.
+- `CONTRIBUTING.md`: contributor workflow and required checks.
+- `SECURITY.md`: private security-reporting path and safe-testing boundary.
 - `ROADMAP.md`: milestone sequence and acceptance criteria.
 - `docs/architecture.md`: protocol/API/component contracts and ADRs.
 - `docs/metrics.md`: exact metric definitions, units, assumptions and examples.
+- `docs/report-contract.md`: required report fields, source of truth, persistence rules and status semantics.
 - `docs/threat-model.md`: threats, controls, residual risks and abuse cases.
 - Update the applicable document in every change that alters a contract, metric, security posture or infrastructure shape.
 
@@ -137,7 +140,7 @@ A task is done only when:
 
 1. It meets the roadmap acceptance criterion.
 2. Unit/integration tests cover normal and security/error paths.
-3. `go test ./... -race` passes once Go code exists.
+3. `cargo test --workspace`, `cargo fmt --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass once Rust code exists.
 4. Relevant docs are updated.
 5. No secrets, customer/vendor data, unbounded UDP behavior or undocumented cloud resources were introduced.
 6. The change is reviewed as a small, focused Git diff.

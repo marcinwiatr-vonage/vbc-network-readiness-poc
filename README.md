@@ -3,7 +3,7 @@
 > A personal engineering proof of concept for measuring **bidirectional UDP network quality** between an endpoint and a regional probe.
 
 [![Status: design](https://img.shields.io/badge/status-design-blue)](#project-status)
-[![Language: Go](https://img.shields.io/badge/language-Go-00ADD8)](#technology-decisions)
+[![Language: Rust](https://img.shields.io/badge/language-Rust-DEA584)](#technology-decisions)
 [![Infrastructure: Terraform](https://img.shields.io/badge/infrastructure-Terraform-7B42BC)](#aws-poc-boundary)
 
 ## Important boundary
@@ -27,9 +27,10 @@ Network Readiness Probe will run a **bounded, authenticated, full-duplex UDP tes
 
 ## Goals
 
-- Build a cross-platform endpoint agent in Go for Windows, Linux, and macOS.
+- Build a cross-platform endpoint agent in Rust for Windows, Linux, and macOS.
 - Operate a controlled regional UDP probe, beginning in Frankfurt (`eu-central-1`).
 - Measure UL/DL packet loss, jitter p50/p95, RTT and achieved throughput separately.
+- Produce a VoIP-style report with runner-visible environment metadata, target profile, capacity, directional media metrics and controlled firewall reachability.
 - Make test execution safe: short-lived session credentials, strict rate limits, fixed duration and no UDP reflection behavior.
 - Define all cloud infrastructure in Terraform and make builds/deployment repeatable.
 - Keep the first release focused on diagnostic integrity rather than a polished dashboard.
@@ -42,13 +43,13 @@ Network Readiness Probe will run a **bounded, authenticated, full-duplex UDP tes
 - SIP registration or collection of credentials.
 - A generic UDP echo service.
 - A MOS score before codec, packetization, impairment model and one-way-delay assumptions are explicitly documented.
-- Electron desktop application; the agent should remain a small native Go binary.
+- Electron desktop application; the agent should remain a small native Rust binary.
 
 ## Architecture
 
 ```text
 +-------------------------------------+
-| Endpoint agent (Go CLI)             |
+| Endpoint agent (Rust CLI)           |
 |-------------------------------------|
 | - requests a one-time test session  |
 | - validates and sends UDP frames    |
@@ -87,7 +88,7 @@ Two observers are deliberate. The probe establishes whether agent-originated pac
 The wire format must be fixed-length-header binary framing, not JSON per datagram:
 
 ```text
-magic | protocol_version | test_id | direction | sequence_number |
+magic | protocol_version | direction | test_id | sequence_number |
 monotonic_send_timestamp | payload_length | random_payload | HMAC
 ```
 
@@ -137,7 +138,7 @@ See [docs/threat-model.md](docs/threat-model.md) for the security design baselin
 
 ## Project status
 
-The repository is in the **design and scaffolding phase**. The first executable milestone is a local agent and local probe with verified bidirectional packet metrics. AWS is not touched until this test passes.
+**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, authenticated packet codec and an actual loopback agent↔probe integration test are implemented locally. The test proves one valid full-duplex exchange and that an unknown session receives no UDP response. Security/error-path coverage, an expiring source-bound session registry and a user-facing binary workflow are still outstanding. AWS remains intentionally untouched.
 
 The authoritative delivery sequence is in [ROADMAP.md](ROADMAP.md).
 
@@ -145,26 +146,20 @@ The authoritative delivery sequence is in [ROADMAP.md](ROADMAP.md).
 
 ```text
 .
-├── cmd/
+├── crates/
 │   ├── agent/                 # Endpoint CLI binary
 │   ├── api/                   # HTTPS session/result API
-│   └── probe/                 # UDP probe daemon
-├── internal/
-│   ├── agent/
-│   ├── api/
-│   ├── protocol/              # Framed packet codec + HMAC
-│   ├── probe/
-│   ├── result/                # Metric calculation and validation
-│   └── store/
-├── proto/
-│   └── result.schema.json
+│   ├── probe/                 # UDP probe daemon
+│   └── protocol/              # Framed packet codec + HMAC
 ├── docs/
 │   ├── architecture.md
 │   ├── metrics.md
+│   ├── report-contract.md
 │   └── threat-model.md
 ├── infra/terraform/
 ├── .github/workflows/
 ├── AGENTS.md
+├── Cargo.toml                  # Rust workspace manifest
 ├── ROADMAP.md
 └── README.md
 ```
@@ -173,26 +168,30 @@ The authoritative delivery sequence is in [ROADMAP.md](ROADMAP.md).
 
 | Area | Decision | Rationale |
 |---|---|---|
-| Endpoint/probe/API | Go | Native cross-platform binary, predictable UDP handling, static release artefacts. |
-| Control plane | Go `net/http` initially | One language/runtime and minimal operational surface. |
+| Endpoint/probe/API | Rust | Native cross-platform binaries, predictable UDP handling, memory safety and static release artefacts. |
+| Async runtime | Tokio | Mature async I/O and UDP primitives for agent, probe and API. |
+| HTTP/API | Axum | Small Tokio-native HTTP layer with typed request/response handling. |
 | Data store | SQLite locally; PostgreSQL only when history needs exceed local scope | Avoids premature infrastructure. |
 | Compute | EC2 + Elastic IP | Direct UDP endpoint and explicit networking controls. |
 | Infrastructure | Terraform | Reproducible, reviewable cloud state. |
 | Packaging | Docker | Repeatable API/probe deployment; agent remains native. |
-| CI | GitHub Actions | Tests, race detection, security checks and Terraform validation. |
+| CI | GitHub Actions | `fmt`, Clippy, tests, dependency audit and Terraform validation. |
 
 ## Local developer workflow — target state
 
 The following commands become valid as implementation is added:
 
 ```bash
-# Run unit/integration tests including Go race detection
-go test ./... -race
+# Run unit and integration tests
+cargo test --workspace
+
+# Run static checks
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo audit
 
 # Build binaries
-go build ./cmd/agent
-go build ./cmd/probe
-go build ./cmd/api
+cargo build --workspace --release
 
 # Start local API and probe after compose configuration is added
 docker compose up --build
@@ -211,9 +210,13 @@ terraform plan
 
 Read [ROADMAP.md](ROADMAP.md) before creating implementation work. The rules for human and AI contributors, including Vonage Codex usage, security boundaries and mandatory test gates, are in [AGENTS.md](AGENTS.md).
 
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Review [SECURITY.md](SECURITY.md) for private vulnerability reporting and the project’s safe-testing boundary.
+
 ## License
 
-Planned license: **Apache-2.0**. Add the canonical license text before the first public implementation commit.
+Copyright 2026 Marcin Wiatr. Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.
 
 ## Disclaimer
 

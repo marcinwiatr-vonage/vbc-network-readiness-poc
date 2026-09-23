@@ -1,0 +1,20 @@
+[package]
+name = "agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+
+[dev-dependencies]
+probe = { path = "../probe" }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"

@@ -8,7 +8,7 @@ Network Readiness Probe measures network behavior between an endpoint agent and 
 
 ### Endpoint agent
 
-A signed/static Go CLI released for Windows, Linux and macOS. Responsibilities:
+A signed/static Rust CLI released for Windows, Linux and macOS. Responsibilities:
 
 - requests an HTTPS test session;
 - performs authenticated UDP handshake;
@@ -31,7 +31,7 @@ A small HTTPS service. Responsibilities:
 
 ### UDP probe
 
-A Go daemon with a public UDP listener. Responsibilities:
+A Rust daemon using Tokio with a public UDP listener. Responsibilities:
 
 - validates frame format, session ID, HMAC and expiry;
 - binds a valid session to the first verified source address and port;
@@ -44,6 +44,12 @@ It is not an echo server. It never takes a target address from the client.
 ### Result store
 
 SQLite is sufficient locally. The stored record contains test metadata, aggregate numeric metrics, warnings, agent/probe versions and retention timestamps. Packet payloads are never stored.
+
+### Milestone 1 local execution contract
+
+Before an API or any public listener exists, local tests use loopback only. A session is constructed explicitly in memory with an opaque 16-byte test ID, a per-session HMAC key and an expiry. The intended probe contract is to bind a session to the first source `IP:port` from a valid authenticated uplink frame and emit downlink frames only to that bound address, only while valid, without mirroring received payload bytes.
+
+The current implementation expresses this contract as a local Rust integration test. The probe rejects a socket not bound to a loopback address, receives exactly one **uplink** datagram for one explicit session, and returns a fixed 172-byte **downlink** frame only after successful HMAC and test-ID validation. The tests also prove an unknown test ID receives no UDP response. The expiring registry, durable source binding and user-facing local binary commands remain Milestone 1 follow-up work.
 
 ## Trust boundaries
 

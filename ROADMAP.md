@@ -18,9 +18,9 @@ This roadmap is deliberately ordered by risk. We establish protocol correctness 
 - [x] Create README with boundaries, architecture, protocol and AWS approach.
 - [x] Create `AGENTS.md` for VS Code / Codex contributors.
 - [x] Create this roadmap.
-- [ ] Add Apache-2.0 `LICENSE` before publishing implementation.
-- [ ] Add `CONTRIBUTING.md` and issue/PR templates when the first implementation issue exists.
-- [ ] Add `docs/architecture.md`, `docs/metrics.md` and `docs/threat-model.md` as source-of-truth design docs.
+- [x] Add Apache-2.0 `LICENSE` and `NOTICE` with the project copyright holder.
+- [x] Add `CONTRIBUTING.md`, `SECURITY.md`, and issue/PR templates.
+- [x] Add `docs/architecture.md`, `docs/metrics.md`, `docs/report-contract.md` and `docs/threat-model.md` as source-of-truth design docs.
 
 **Exit criterion:** a new contributor can understand project scope, risks and first milestones without external context.
 
@@ -30,21 +30,24 @@ This roadmap is deliberately ordered by risk. We establish protocol correctness 
 
 ### Deliverables
 
-- [ ] Go module and package layout.
-- [ ] Fixed binary UDP packet encoder/decoder in `internal/protocol`.
-- [ ] Frame fields: protocol version, test ID, direction, monotonic sequence, monotonic timestamp, bounded payload and HMAC.
-- [ ] Unit tests for valid round trip, short frame, bad magic/version, oversized payload and invalid HMAC.
+- [x] Rust workspace and `protocol` crate layout.
+- [x] First authenticated fixed binary packet encode/decode path in `crates/protocol`.
+- [x] Core frame fields: magic/version, test ID, direction, monotonic sequence/timestamp, bounded payload and HMAC-SHA-256 tag.
+- [x] Initial round-trip test: authenticated 172-byte frame encodes and decodes unchanged.
+- [ ] TDD negative-path codec tests: invalid HMAC, modified payload/tag, short frame, invalid magic/version/direction, oversized payload and declared-length mismatch.
 - [ ] In-memory session registry with expiry and a single bound source address/port.
-- [ ] Minimal UDP probe daemon accepting only known test IDs.
-- [ ] Minimal endpoint agent able to complete a full-duplex localhost run.
+- [x] Minimal loopback UDP probe handler accepts one explicit known session and stays silent for an unknown test ID.
+- [x] Local Rust integration test proves a valid `127.0.0.1` full-duplex exchange and verifies no response for an unknown session. Expired and invalid-HMAC silence tests remain pending.
 
 ### Required tests
 
 ```bash
-go test ./internal/protocol/... -race
-go test ./internal/probe/... -race
-go test ./internal/agent/... -race
-go test ./... -race
+cargo test -p protocol
+cargo test -p probe
+cargo test -p agent
+cargo test --workspace
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 **Exit criterion:** local agent and local probe exchange authenticated packets in both directions; no UDP response occurs for an unknown or expired test ID.
@@ -60,6 +63,7 @@ go test ./... -race
 - [ ] RTT calculator with min/mean/p95.
 - [ ] JSON output from agent and server-side validation at result ingestion.
 - [ ] Result fixtures: clean link, uplink loss, downlink loss, high jitter and no probe response.
+- [ ] `docs/report-contract.md` acceptance tests: report all target capacity, directional media and controlled firewall fields with correct `not_tested`/`null` semantics.
 - [ ] Agent cancellation and timeout paths.
 
 ### Mandatory semantics
@@ -95,7 +99,7 @@ go test ./... -race
 
 - [ ] Non-root Docker images for API and probe.
 - [ ] `docker-compose.yml` for the local stack.
-- [ ] GitHub Actions workflow running `gofmt`, unit/integration tests, `-race`, `govulncheck`, Docker build, and Terraform `fmt`/`validate` when Terraform exists.
+- [ ] GitHub Actions workflow running `cargo fmt --check`, Clippy with warnings denied, unit/integration tests, `cargo audit`, Docker build, and Terraform `fmt`/`validate` when Terraform exists.
 - [ ] Cross-platform release builds for agent: Windows amd64, Linux amd64, macOS arm64/amd64 as appropriate.
 - [ ] Version injected into agent output and API/probe health response.
 

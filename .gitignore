@@ -5,10 +5,13 @@
 *.pem
 *.key
 
-# Go build artifacts
-agent
-api
-probe
+# Rust build artifacts
+target/
+
+# Native binary artifacts emitted at repository root
+/agent
+/api
+/probe
 *.exe
 *.test
 coverage.out
