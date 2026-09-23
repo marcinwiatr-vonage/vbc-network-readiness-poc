@@ -1,0 +1,39 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Go build artifacts
+agent
+api
+probe
+*.exe
+*.test
+coverage.out
+
+# Terraform state and local overrides
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Local application data
+*.db
+*.db-shm
+*.db-wal
+data/
+results/
+
+# Editor and OS files
+.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
