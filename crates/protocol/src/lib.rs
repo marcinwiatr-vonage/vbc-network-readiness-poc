@@ -2,6 +2,8 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The four-byte protocol discriminator present at the start of every frame.
 pub const MAGIC: [u8; 4] = [0x4E, 0x52, 0x50, 0x02];
@@ -9,11 +11,168 @@ pub const MAGIC: [u8; 4] = [0x4E, 0x52, 0x50, 0x02];
 pub const PROTOCOL_VERSION: u8 = 2;
 /// Largest permitted application payload in one UDP frame.
 pub const MAX_PAYLOAD_LENGTH: usize = 1_200;
+/// Maximum accepted size of a local bootstrap session file.
+pub const LOCAL_SESSION_FILE_MAX_BYTES: usize = 1_024;
 
 const HEADER_LENGTH: usize = 36;
 const AUTH_TAG_LENGTH: usize = 32;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Strict, local-only bootstrap data shared by the probe and agent CLIs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalSessionFile {
+    test_id: [u8; 16],
+    hmac_key: [u8; 32],
+    expires_at_unix_seconds: u64,
+    probe_address: SocketAddr,
+}
+
+impl LocalSessionFile {
+    /// Parses the canonical five-line `NRP-LOCAL-SESSION-V1` contract.
+    pub fn parse(bytes: &[u8]) -> Result<Self, LocalSessionFileError> {
+        if bytes.len() > LOCAL_SESSION_FILE_MAX_BYTES {
+            return Err(LocalSessionFileError::TooLarge);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| LocalSessionFileError::InvalidUtf8)?;
+        let text = text
+            .strip_suffix('\n')
+            .ok_or(LocalSessionFileError::InvalidFormat(
+                "missing final newline",
+            ))?;
+        let lines: Vec<_> = text.split('\n').collect();
+        if lines.len() != 5 || lines[0] != "NRP-LOCAL-SESSION-V1" {
+            return Err(LocalSessionFileError::InvalidFormat(
+                "expected the canonical five-line v1 session format",
+            ));
+        }
+
+        let test_id = parse_hex_field::<16>(lines[1], "test_id_hex=", "test_id_hex")?;
+        let hmac_key = parse_hex_field::<32>(lines[2], "hmac_key_hex=", "hmac_key_hex")?;
+        let expires_at = lines[3].strip_prefix("expires_at_unix_seconds=").ok_or(
+            LocalSessionFileError::InvalidFormat("expected expires_at_unix_seconds as line four"),
+        )?;
+        if expires_at.is_empty()
+            || !expires_at.bytes().all(|byte| byte.is_ascii_digit())
+            || (expires_at.len() > 1 && expires_at.starts_with('0'))
+        {
+            return Err(LocalSessionFileError::InvalidExpiry);
+        }
+        let expires_at_unix_seconds = expires_at
+            .parse()
+            .map_err(|_| LocalSessionFileError::InvalidExpiry)?;
+        let probe_address_text =
+            lines[4]
+                .strip_prefix("probe_address=")
+                .ok_or(LocalSessionFileError::InvalidFormat(
+                    "expected probe_address as line five",
+                ))?;
+        if !matches!(probe_address_text, "127.0.0.1:10000" | "127.0.0.1:16384") {
+            return Err(LocalSessionFileError::InvalidAddress);
+        }
+        let probe_address: SocketAddr = probe_address_text
+            .parse()
+            .map_err(|_| LocalSessionFileError::InvalidAddress)?;
+        if probe_address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST)
+            || !matches!(probe_address.port(), 10_000 | 16_384)
+        {
+            return Err(LocalSessionFileError::InvalidAddress);
+        }
+
+        Ok(Self {
+            test_id,
+            hmac_key,
+            expires_at_unix_seconds,
+            probe_address,
+        })
+    }
+
+    pub const fn test_id(self) -> [u8; 16] {
+        self.test_id
+    }
+
+    pub const fn hmac_key(self) -> [u8; 32] {
+        self.hmac_key
+    }
+
+    pub const fn expires_at_unix_seconds(self) -> u64 {
+        self.expires_at_unix_seconds
+    }
+
+    pub const fn probe_address(self) -> SocketAddr {
+        self.probe_address
+    }
+
+    pub fn expires_at(self) -> Result<SystemTime, LocalSessionFileError> {
+        UNIX_EPOCH
+            .checked_add(Duration::from_secs(self.expires_at_unix_seconds))
+            .ok_or(LocalSessionFileError::InvalidExpiry)
+    }
+}
+
+fn parse_hex_field<const N: usize>(
+    line: &str,
+    prefix: &'static str,
+    field: &'static str,
+) -> Result<[u8; N], LocalSessionFileError> {
+    let encoded = line
+        .strip_prefix(prefix)
+        .ok_or(LocalSessionFileError::InvalidFormat(field))?;
+    if encoded.len() != N * 2
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(LocalSessionFileError::InvalidHex(field));
+    }
+    let mut decoded = [0_u8; N];
+    let (pairs, remainder) = encoded.as_bytes().as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    for (index, pair) in pairs.iter().enumerate() {
+        decoded[index] = (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]);
+    }
+    Ok(decoded)
+}
+
+fn hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        _ => unreachable!("hex was validated before decoding"),
+    }
+}
+
+/// Validation failures for the local bootstrap session-file contract.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalSessionFileError {
+    TooLarge,
+    InvalidUtf8,
+    InvalidFormat(&'static str),
+    InvalidHex(&'static str),
+    InvalidExpiry,
+    InvalidAddress,
+}
+
+impl core::fmt::Display for LocalSessionFileError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::TooLarge => formatter.write_str("local session file exceeds 1024 bytes"),
+            Self::InvalidUtf8 => formatter.write_str("local session file is not valid UTF-8"),
+            Self::InvalidFormat(detail) => {
+                write!(formatter, "invalid local session format: {detail}")
+            }
+            Self::InvalidHex(field) => {
+                write!(formatter, "invalid canonical lowercase hex in {field}")
+            }
+            Self::InvalidExpiry => formatter.write_str("invalid local session expiry"),
+            Self::InvalidAddress => {
+                formatter.write_str("probe_address must be 127.0.0.1 on UDP port 10000 or 16384")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LocalSessionFileError {}
 
 /// Direction relative to the endpoint agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

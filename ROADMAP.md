@@ -36,6 +36,7 @@ This roadmap is ordered by risk: protocol correctness and abuse resistance prece
 - [x] Loopback probe handler accepts an explicit known session and stays silent for an unknown test ID.
 - [x] Loopback integration test proves a valid full-duplex exchange and no response for an unknown session.
 - [x] Bounded local receive loop admits at most 32 packets within two seconds and remains silent for malformed, invalid-HMAC, expired, replayed, wrong-direction, and rebound traffic.
+- [x] Separate runnable local probe/agent binaries with a strict one-time session-file contract, bounded execution, explicit errors, JSON run summaries, and process-level tests.
 
 ### Required tests
 

@@ -2,6 +2,8 @@
 
 This document defines the report shape, field ownership, persistence limits, and unavailable-value semantics for Network Readiness Probe. It is a requirements contract for measurements against this project's controlled endpoints.
 
+The Milestone 1 local agent/probe CLI JSON is a bootstrap run summary only. It is not this report contract, is not persisted, and deliberately omits directional quality metrics until the Milestone 2 calculators and versioned result schema exist.
+
 ## Report principles
 
 `protocol_version` is the wire-frame version. The current canonical frame is v2; the earlier experimental v1 layout is retired and must be rejected rather than silently decoded.

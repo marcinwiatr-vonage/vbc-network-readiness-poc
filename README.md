@@ -126,7 +126,7 @@ See [docs/threat-model.md](docs/threat-model.md) for abuse cases, controls, and 
 
 ## Project status
 
-**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, canonical authenticated packet codec, expiring source-bound registry, and bounded 32-packet/two-second loopback agent↔probe exchange exist locally. The loop silently rejects malformed, invalid-HMAC, unknown-session, expired, replayed, wrong-direction, and rebound traffic. Current work still needs complete negative-path codec coverage, terminal completion handling, and a user-facing binary workflow. AWS remains intentionally untouched.
+**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, canonical authenticated packet codec, expiring source-bound registry, bounded 32-packet/two-second loopback agent↔probe exchange, and separate local CLI binaries exist. The loop silently rejects malformed, invalid-HMAC, unknown-session, expired, replayed, wrong-direction, and rebound traffic. Current work still needs complete negative-path codec coverage and registry-level terminal completion handling. AWS remains intentionally untouched.
 
 The authoritative delivery sequence is [ROADMAP.md](ROADMAP.md).
 
@@ -165,7 +165,40 @@ The authoritative delivery sequence is [ROADMAP.md](ROADMAP.md).
 | Packaging | Docker | Repeatable API/probe deployment; agent remains native. |
 | CI | GitHub Actions | Formatting, linting, tests, dependency audit, and infrastructure validation. |
 
-## Local developer workflow — target state
+## Runnable local CLI
+
+Build the binaries, then create a one-time session file outside the repository. This example uses Python only to generate random local bootstrap material; the material is never printed by either Rust binary:
+
+```bash
+cargo build --workspace
+
+python - <<'PY'
+import secrets, tempfile, time
+from pathlib import Path
+
+path = Path(tempfile.gettempdir()) / "nrp-local.session"
+path.write_text(
+    "NRP-LOCAL-SESSION-V1\n"
+    f"test_id_hex={secrets.token_hex(16)}\n"
+    f"hmac_key_hex={secrets.token_hex(32)}\n"
+    f"expires_at_unix_seconds={int(time.time()) + 60}\n"
+    "probe_address=127.0.0.1:10000\n",
+    encoding="utf-8",
+)
+print(path)
+PY
+```
+
+Start the probe and then the agent immediately from separate terminals; the probe has a hard two-second active window. On Windows, use the `.exe` suffix:
+
+```bash
+target/debug/probe --session-file /path/from/the/generator
+target/debug/agent --session-file /path/from/the/generator --response-timeout-ms 500
+```
+
+Both commands emit one compact JSON run summary. Delete the session file after the run. Only `127.0.0.1:10000` and `127.0.0.1:16384` are accepted; this workflow cannot create a public listener or target another host.
+
+## Local developer workflow
 
 ```bash
 cargo test --workspace

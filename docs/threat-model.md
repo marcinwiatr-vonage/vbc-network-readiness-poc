@@ -24,6 +24,7 @@ Assets to protect:
 | Probe impersonation or target substitution | Agent sends authenticated data to an unintended target. | HTTPS-authenticated session response, explicit configured probe ID/host/port, agent allowlist/session binding, and no client-controlled UDP destination. |
 | Sensitive data retention | Privacy or compliance exposure. | No customer data, credentials, payload logs, or persistent raw IP by default; minimise/hash where needed; documented retention/deletion policy. |
 | Credential leakage | Infrastructure or source compromise. | No secrets in source/chat/logs, least privilege, short-lived roles where available, secret scanning, root MFA, and rotation/revocation procedure. |
+| Local session-file disclosure or target substitution | One-time HMAC material leaks or the agent is redirected. | Strict 1 KiB versioned file parser; canonical lowercase hex; exact IPv4 loopback target; only UDP `10000` or `16384`; no credential output; operator creates the file outside the repository with restricted permissions and deletes it after use. |
 | Terraform drift or manual exposure | Unknown ingress or recurring cost. | Terraform-managed permanent resources, reviewed plans, exact UDP ingress on `10000` or `16384`, state protection, cost budget, and destroy procedure. |
 | Supply-chain compromise | Malicious dependency or artifact. | Dependency review, `cargo audit`, CI builds, release provenance/checksums, and prompt patching. |
 
@@ -39,6 +40,7 @@ Assets to protect:
 8. The agent accepts only authenticated downlink frames for its active session from the selected probe endpoint.
 9. Result submission cannot overwrite another session or create a second authoritative result.
 10. The externally provisioned UDP listener is exactly `10000` or `16384`; no unapproved listener is exposed, and unknown traffic remains silent from a non-local network.
+11. Both local binaries reject oversized, malformed, non-canonical, reordered, or trailing session-file data and reject any target other than `127.0.0.1:10000` or `127.0.0.1:16384` before opening or sending on a UDP socket.
 
 ## Residual risk and operational response
 

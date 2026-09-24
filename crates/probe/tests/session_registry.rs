@@ -188,7 +188,10 @@ fn probe_serves_a_bounded_authenticated_packet_train() {
         assert_eq!(downlink.sequence_number(), sequence);
     }
 
-    let run = probe_thread.join().expect("probe thread must not panic");
+    let run = probe_thread
+        .join()
+        .expect("probe thread must not panic")
+        .expect("probe session must complete");
     assert_eq!(run.accepted_packets, MAX_SESSION_PACKETS);
     assert_eq!(run.responses_sent, MAX_SESSION_PACKETS);
 }
@@ -222,7 +225,10 @@ fn malformed_datagram_is_silent_and_does_not_end_the_session() {
         .expect("send valid uplink");
     receive_downlink(&agent_socket, &key, 1);
 
-    let run = probe_thread.join().expect("probe thread must not panic");
+    let run = probe_thread
+        .join()
+        .expect("probe thread must not panic")
+        .expect("probe session must complete");
     assert_eq!(run.accepted_packets, 1);
     assert_eq!(run.responses_sent, 1);
 }
@@ -261,7 +267,10 @@ fn replayed_sequence_is_silent_without_consuming_the_packet_budget() {
         .expect("send increasing uplink");
     receive_downlink(&agent_socket, &key, 2);
 
-    let run = probe_thread.join().expect("probe thread must not panic");
+    let run = probe_thread
+        .join()
+        .expect("probe thread must not panic")
+        .expect("probe session must complete");
     assert_eq!(run.accepted_packets, 2);
     assert_eq!(run.responses_sent, 2);
 }
@@ -304,7 +313,10 @@ fn rebound_source_is_silent_without_changing_the_bound_source() {
         .expect("send bound-source uplink");
     receive_downlink(&bound_socket, &key, 2);
 
-    let run = probe_thread.join().expect("probe thread must not panic");
+    let run = probe_thread
+        .join()
+        .expect("probe thread must not panic")
+        .expect("probe session must complete");
     assert_eq!(run.accepted_packets, 2);
     assert_eq!(run.responses_sent, 2);
 }
@@ -319,7 +331,10 @@ fn probe_stops_at_the_fixed_duration_ceiling() {
     );
     let started_at = Instant::now();
 
-    assert_eq!(serve_session(socket, session), ProbeRun::default());
+    assert_eq!(
+        serve_session(socket, session).expect("probe session must complete"),
+        ProbeRun::default()
+    );
     assert!(started_at.elapsed() <= MAX_SESSION_DURATION + Duration::from_secs(1));
 }
 
@@ -332,7 +347,8 @@ fn probe_rejects_a_non_loopback_bind_address() {
         SystemTime::now() + Duration::from_secs(2),
     );
 
-    assert_eq!(serve_session(socket, session), ProbeRun::default());
+    let error = serve_session(socket, session).expect_err("wildcard bind must fail explicitly");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
 
 #[test]
@@ -359,7 +375,10 @@ fn downlink_direction_sent_to_probe_receives_no_udp_response() {
         "probe must remain silent"
     );
     assert_eq!(
-        probe_thread.join().expect("probe thread must not panic"),
+        probe_thread
+            .join()
+            .expect("probe thread must not panic")
+            .expect("probe session must complete"),
         ProbeRun::default()
     );
 }
@@ -386,7 +405,10 @@ fn expired_session_receives_no_udp_response() {
         "probe must remain silent"
     );
     assert_eq!(
-        probe_thread.join().expect("probe thread must not panic"),
+        probe_thread
+            .join()
+            .expect("probe thread must not panic")
+            .expect("probe session must complete"),
         ProbeRun::default()
     );
 }
@@ -413,7 +435,10 @@ fn invalid_hmac_receives_no_udp_response() {
         "probe must remain silent"
     );
     assert_eq!(
-        probe_thread.join().expect("probe thread must not panic"),
+        probe_thread
+            .join()
+            .expect("probe thread must not panic")
+            .expect("probe session must complete"),
         ProbeRun::default()
     );
 }
@@ -446,7 +471,10 @@ fn unknown_test_id_receives_no_udp_response() {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
     ));
     assert_eq!(
-        probe_thread.join().expect("probe thread must not panic"),
+        probe_thread
+            .join()
+            .expect("probe thread must not panic")
+            .expect("probe session must complete"),
         ProbeRun::default()
     );
 }

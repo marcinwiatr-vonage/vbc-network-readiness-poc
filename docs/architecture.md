@@ -85,6 +85,24 @@ During that lifetime, the registry authorizes only authenticated uplink frames f
 
 The implemented local receive loop binds only to an IPv4 or IPv6 loopback address and admits at most **32 authenticated uplink packets**. Its effective monotonic deadline is the earlier of the session deadline and **two seconds after loop start**. Each admitted uplink produces one fixed 172-byte-payload downlink frame, numbered from 1 in admission order and sent only to the permit destination. Reaching the packet ceiling or effective deadline terminates the loop; malformed, invalid-HMAC, unknown-session, expired, replayed/out-of-order, wrong-direction, or source-rebound traffic produces no response and does not consume the admitted-packet budget. Terminal completion state beyond loop termination remains deferred Milestone 1 work.
 
+### Local CLI bootstrap contract
+
+The Milestone 1 binaries use an operator-created, local-only session file instead of the future HTTPS control plane. The file is UTF-8 text, is limited to 1 KiB, and has exactly these five newline-delimited records in this order:
+
+```text
+NRP-LOCAL-SESSION-V1
+test_id_hex=<32 lowercase hexadecimal characters>
+hmac_key_hex=<64 lowercase hexadecimal characters>
+expires_at_unix_seconds=<unsigned decimal UTC epoch seconds>
+probe_address=127.0.0.1:<10000-or-16384>
+```
+
+Unknown, duplicated, reordered, missing, non-canonical, or trailing records are rejected. The target must be the IPv4 loopback address and exactly UDP `10000` or `16384`; hostnames, wildcard addresses, additional ports, and client-selected remote destinations are not accepted. The file contains one-time HMAC material, so it must be created outside the repository, permission-restricted by the operator, and deleted after the run. No example with a usable credential is committed.
+
+`probe --session-file <path>` binds only to the address in that validated file and still applies the earlier of file expiry or the two-second monotonic runtime ceiling. `agent --session-file <path> [--response-timeout-ms <1..=2000>]` sends the fixed 32-packet local profile only to the validated address. Invalid arguments, unreadable or invalid session files, expired sessions, bind failures, and internal protocol/I/O failures are explicit non-zero errors; only the expected probe receive timeout at its bounded deadline produces a normal `DEADLINE_REACHED` summary.
+
+Each binary writes one compact JSON object to standard output for an executed run. This is a versioned **local run summary**, not the Milestone 2 report schema and not a persisted result. The agent reports `COMPLETED` only after all 32 authenticated responses, or `UDP_UNREACHABLE_OR_BLOCKED` with unavailable counts represented as `null` when no validated response arrives before the bounded timeout. The probe reports whether its packet ceiling was completed or its deadline was reached, plus admitted and sent counts. One-time HMAC material is never emitted.
+
 
 ```text
 [Untrusted endpoint/network]

@@ -43,7 +43,10 @@ fn agent_completes_an_authenticated_loopback_exchange() {
 
     assert_eq!(result.uplink_sent, u64::from(MAX_SESSION_PACKETS));
     assert_eq!(result.downlink_received, u64::from(MAX_SESSION_PACKETS));
-    let probe_run = probe_thread.join().expect("probe thread must not panic");
+    let probe_run = probe_thread
+        .join()
+        .expect("probe thread must not panic")
+        .expect("probe session must complete");
     assert_eq!(probe_run.accepted_packets, MAX_SESSION_PACKETS);
     assert_eq!(probe_run.responses_sent, MAX_SESSION_PACKETS);
 }

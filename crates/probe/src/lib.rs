@@ -142,7 +142,7 @@ pub struct ProbeRun {
 /// Runs one loopback-only, authenticated, bounded local probe session.
 ///
 /// Invalid traffic is rejected silently and does not consume the packet budget.
-pub fn serve_session(socket: UdpSocket, mut session: LocalSession) -> ProbeRun {
+pub fn serve_session(socket: UdpSocket, mut session: LocalSession) -> std::io::Result<ProbeRun> {
     let started_at = Instant::now();
     session.deadline = session
         .deadline
@@ -150,13 +150,14 @@ pub fn serve_session(socket: UdpSocket, mut session: LocalSession) -> ProbeRun {
     serve_bounded(socket, session)
 }
 
-fn serve_bounded(socket: UdpSocket, session: LocalSession) -> ProbeRun {
+fn serve_bounded(socket: UdpSocket, session: LocalSession) -> std::io::Result<ProbeRun> {
     let mut run = ProbeRun::default();
-    let Ok(bound_address) = socket.local_addr() else {
-        return run;
-    };
+    let bound_address = socket.local_addr()?;
     if !bound_address.ip().is_loopback() {
-        return run;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "local probe requires a loopback bind address",
+        ));
     }
 
     let registry = SessionRegistry::with_session(session.test_id, session.deadline);
@@ -166,17 +167,20 @@ fn serve_bounded(socket: UdpSocket, session: LocalSession) -> ProbeRun {
         if now >= session.deadline {
             break;
         }
-        if socket
-            .set_read_timeout(Some(session.deadline.duration_since(now)))
-            .is_err()
-        {
-            break;
-        }
+        socket.set_read_timeout(Some(session.deadline.duration_since(now)))?;
 
         let (received, source) = match socket.recv_from(&mut buffer) {
             Ok(received) => received,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => return Err(error),
         };
         let Ok(packet) = Packet::decode(&buffer[..received], &session.key) else {
             continue;
@@ -201,14 +205,10 @@ fn serve_bounded(socket: UdpSocket, session: LocalSession) -> ProbeRun {
             0,
             vec![0_u8; 172],
         );
-        if socket
-            .send_to(&response.encode(&session.key), permit.destination())
-            .is_ok()
-        {
-            run.responses_sent += 1;
-        }
+        socket.send_to(&response.encode(&session.key), permit.destination())?;
+        run.responses_sent += 1;
     }
-    run
+    Ok(run)
 }
 
 #[cfg(test)]
