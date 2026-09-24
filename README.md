@@ -126,7 +126,7 @@ See [docs/threat-model.md](docs/threat-model.md) for abuse cases, controls, and 
 
 ## Project status
 
-**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, canonical authenticated packet codec, and loopback agent↔probe integration test exist locally. Current work still needs complete negative-path codec coverage, an expiring source-bound session registry, and a user-facing binary workflow. AWS remains intentionally untouched.
+**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, canonical authenticated packet codec, loopback agent↔probe integration test, and an expiring source-bound registry primitive exist locally. Current work still needs complete negative-path codec coverage, integration of registry state into a bounded multi-packet receive loop, terminal completion handling, and a user-facing binary workflow. AWS remains intentionally untouched.
 
 The authoritative delivery sequence is [ROADMAP.md](ROADMAP.md).
 

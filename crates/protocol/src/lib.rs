@@ -97,6 +97,11 @@ impl Packet {
         self.direction
     }
 
+    /// Returns the per-direction sequence number used for replay admission.
+    pub const fn sequence_number(&self) -> u32 {
+        self.sequence_number
+    }
+
     /// Returns the wire-format version carried by this packet.
     pub const fn protocol_version(&self) -> u8 {
         PROTOCOL_VERSION

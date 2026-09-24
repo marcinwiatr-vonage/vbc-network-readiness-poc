@@ -29,7 +29,7 @@ pub fn run_local_test(
     let socket = UdpSocket::bind("127.0.0.1:0")?;
     socket.set_read_timeout(Some(response_timeout))?;
 
-    let uplink = Packet::new(test_id, Direction::Uplink, 0, 0, vec![0_u8; 172]);
+    let uplink = Packet::new(test_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
     socket.send_to(&uplink.encode(&key), probe_address)?;
 
     let mut buffer = [0_u8; 1_272];

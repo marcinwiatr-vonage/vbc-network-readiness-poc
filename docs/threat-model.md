@@ -18,7 +18,7 @@ Assets to protect:
 |---|---|---|
 | UDP reflection or amplification | Probe sends traffic to a victim. | One-time authenticated session; first-verified-source `IP:port` binding; no client-provided destination; bounded response size/rate/duration; no echo; silence for unknown traffic. |
 | Session replay | Reused material creates traffic or corrupts results. | Single-use test ID, short expiry, atomic state transition, HMAC, source binding, and replay tests. |
-| Forged frame or result | False diagnostic conclusion. | Exact v1 framing, per-session HMAC-SHA256, strict schema/range validation, and separately attributed agent/probe observations. |
+| Forged frame or result | False diagnostic conclusion. | Exact v2 framing, per-session HMAC-SHA256, strict schema/range validation, and separately attributed agent/probe observations. |
 | Parser denial of service | Malformed input crashes the probe or consumes memory/CPU. | Reject frames under 68 bytes; validate magic/version/direction before session lookup; reject payload length over 1200 before allocation; require exact length up to 1268; verify HMAC; fuzz/error-path tests; unprivileged Rust containers. |
 | Resource exhaustion | CPU, sockets, bandwidth, or spend exhaustion. | Per-source/session/concurrency limits, fixed payload/rate/duration ceilings, timeouts, budgets, alerts, monitoring, and an ingress disable/destroy runbook. |
 | Probe impersonation or target substitution | Agent sends authenticated data to an unintended target. | HTTPS-authenticated session response, explicit configured probe ID/host/port, agent allowlist/session binding, and no client-controlled UDP destination. |
@@ -46,7 +46,7 @@ A public UDP service always receives hostile traffic and consumes network capaci
 
 ## Security change procedure
 
-Before changing UDP ingress, v1 frame/session format, identity/data collection, IAM, Terraform state, dependency class, or adding an optional marker protocol:
+Before changing UDP ingress, v2 frame/session format, identity/data collection, IAM, Terraform state, dependency class, or adding an optional marker protocol:
 
 1. Update this threat model and the relevant architecture/report contract.
 2. Add automated security and error-path tests, including no-response behavior.

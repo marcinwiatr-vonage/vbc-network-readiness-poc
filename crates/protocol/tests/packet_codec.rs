@@ -25,7 +25,8 @@ fn packet_round_trips_through_v2_binary_encoding() {
     assert_eq!(&encoded[34..36], &172_u16.to_be_bytes());
     assert_eq!(encoded[36], 0xAB);
     assert_eq!(encoded.len(), 68 + 172);
-    assert!(Packet::decode(&encoded, &key).is_ok());
+    let decoded = Packet::decode(&encoded, &key).expect("valid v2 packet");
+    assert_eq!(decoded.sequence_number(), 42);
 }
 
 #[test]

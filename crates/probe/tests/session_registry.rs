@@ -1,12 +1,114 @@
 use probe::{LocalSession, SessionAuthorization, SessionRegistry, serve_one};
 use protocol::{Direction, Packet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 #[test]
+fn registry_rejects_at_monotonic_expiry_boundary() {
+    let test_id = [0x44; 16];
+    let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49154);
+    let deadline = std::time::Instant::now();
+    let registry = SessionRegistry::with_session(test_id, deadline);
+
+    assert!(
+        registry
+            .authorize_uplink(test_id, source, 1, deadline)
+            .is_none()
+    );
+}
+
+#[test]
+fn registry_binds_first_source_and_rejects_rebinding() {
+    let test_id = [0x11; 16];
+    let first_source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152);
+    let second_source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49153);
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let registry = SessionRegistry::with_session(test_id, deadline);
+
+    let first_permit = registry
+        .authorize_uplink(test_id, first_source, 1, std::time::Instant::now())
+        .expect("first verified source must be authorized");
+    assert_eq!(first_permit.destination(), first_source);
+    let second_permit = registry
+        .authorize_uplink(test_id, first_source, 2, std::time::Instant::now())
+        .expect("bound source with an increasing sequence must be authorized");
+    assert_eq!(second_permit.destination(), first_source);
+    assert!(
+        registry
+            .authorize_uplink(test_id, second_source, 3, std::time::Instant::now())
+            .is_none()
+    );
+    assert!(
+        registry
+            .authorize_uplink(test_id, first_source, 2, std::time::Instant::now())
+            .is_none()
+    );
+}
+
+#[test]
+fn registry_rejects_sequence_zero_without_binding_the_source() {
+    let test_id = [0x22; 16];
+    let rejected_source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152);
+    let accepted_source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49153);
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let registry = SessionRegistry::with_session(test_id, deadline);
+
+    assert!(
+        registry
+            .authorize_uplink(test_id, rejected_source, 0, std::time::Instant::now())
+            .is_none()
+    );
+    assert!(
+        registry
+            .authorize_uplink(test_id, accepted_source, 1, std::time::Instant::now())
+            .is_some(),
+        "an invalid sequence must not bind the session"
+    );
+}
+
+#[test]
+fn concurrent_first_sources_produce_exactly_one_binding() {
+    let test_id = [0x33; 16];
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let registry = Arc::new(SessionRegistry::with_session(test_id, deadline));
+    let barrier = Arc::new(Barrier::new(3));
+    let sources = [
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49153),
+    ];
+
+    let handles: Vec<_> = sources
+        .into_iter()
+        .map(|source| {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                registry.authorize_uplink(test_id, source, 1, std::time::Instant::now())
+            })
+        })
+        .collect();
+
+    barrier.wait();
+    let authorizations: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("authorization thread must not panic"))
+        .collect();
+
+    assert_eq!(
+        authorizations
+            .iter()
+            .filter(|authorization| authorization.is_some())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn unknown_session_is_not_authorized() {
-    let registry = SessionRegistry;
+    let registry = SessionRegistry::default();
     let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152);
 
     let authorization = registry.authorize(
@@ -48,6 +150,54 @@ fn downlink_direction_sent_to_probe_receives_no_udp_response() {
         .send_to(&wrong_direction.encode(&key), probe_address)
         .expect("send wrong-direction packet");
 
+    let mut buffer = [0_u8; 1_272];
+    assert!(
+        agent_socket.recv_from(&mut buffer).is_err(),
+        "probe must remain silent"
+    );
+    assert!(!probe_thread.join().expect("probe thread must not panic"));
+}
+
+#[test]
+fn expired_session_receives_no_udp_response() {
+    let session_id = [0x66; 16];
+    let key = [0x22; 32];
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
+    let probe_address = probe_socket.local_addr().expect("probe address");
+    let session = LocalSession::new(session_id, key, SystemTime::now() - Duration::from_secs(1));
+    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind agent");
+    agent_socket
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .expect("set timeout");
+    let packet = Packet::new(session_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
+    agent_socket
+        .send_to(&packet.encode(&key), probe_address)
+        .expect("send expired-session frame");
+    let mut buffer = [0_u8; 1_272];
+    assert!(
+        agent_socket.recv_from(&mut buffer).is_err(),
+        "probe must remain silent"
+    );
+    assert!(!probe_thread.join().expect("probe thread must not panic"));
+}
+
+#[test]
+fn invalid_hmac_receives_no_udp_response() {
+    let session_id = [0x55; 16];
+    let key = [0x22; 32];
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
+    let probe_address = probe_socket.local_addr().expect("probe address");
+    let session = LocalSession::new(session_id, key, SystemTime::now() + Duration::from_secs(2));
+    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind agent");
+    agent_socket
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .expect("set timeout");
+    let packet = Packet::new(session_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
+    agent_socket
+        .send_to(&packet.encode(&[0x33; 32]), probe_address)
+        .expect("send invalid hmac");
     let mut buffer = [0_u8; 1_272];
     assert!(
         agent_socket.recv_from(&mut buffer).is_err(),

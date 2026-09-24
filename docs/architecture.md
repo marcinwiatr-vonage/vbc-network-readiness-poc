@@ -77,7 +77,14 @@ The header is 36 bytes; the authentication tag is 32 bytes. A zero-payload frame
 
 Sequence numbers are independent `u32` streams in each direction. Wraparound behavior must be deliberately specified and tested before release; it is not inferred by the wire decoder.
 
-## Trust boundaries
+## Local session lifecycle and replay policy
+
+Milestone 1 registry entries use an injected **monotonic** deadline; an entry is expired when `now >= deadline`, regardless of wall-clock changes. Conversion from the local bootstrap API's wall-clock expiry uses checked monotonic arithmetic and fails closed when the duration cannot be represented. “Single-use” means one atomic transition from unbound to the first verified source `IP:port`, followed by one bounded active lifetime—not one accepted packet.
+
+During that lifetime, the registry authorizes only authenticated uplink frames from the bound source with a non-zero, strictly increasing sequence number. Gaps are permitted so loss can be measured; duplicate, lower, zero, and out-of-order frames are rejected. Each successful authorization returns a short immutable permit whose destination is exclusively the observed bound source.
+
+The current `serve_one` bootstrap integrates this registry for exactly one validated request and one fixed response. It does not yet preserve registry state across a packet train or implement terminal completion. The bounded multi-packet receive loop, duration/packet ceilings, persistent per-session integration, and completion transition remain Milestone 1 work.
+
 
 ```text
 [Untrusted endpoint/network]
