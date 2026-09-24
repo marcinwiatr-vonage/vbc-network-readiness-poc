@@ -1,9 +1,22 @@
-use probe::{LocalSession, SessionAuthorization, SessionRegistry, serve_one};
+use probe::{
+    LocalSession, MAX_SESSION_DURATION, MAX_SESSION_PACKETS, ProbeRun, SessionAuthorization,
+    SessionRegistry, serve_session,
+};
 use protocol::{Direction, Packet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+fn receive_downlink(socket: &UdpSocket, key: &[u8; 32], expected_sequence: u32) {
+    let mut buffer = [0_u8; 1_272];
+    let (received, _) = socket
+        .recv_from(&mut buffer)
+        .expect("receive authenticated downlink");
+    let packet = Packet::decode(&buffer[..received], key).expect("decode downlink");
+    assert_eq!(packet.direction(), Direction::Downlink);
+    assert_eq!(packet.sequence_number(), expected_sequence);
+}
 
 #[test]
 fn registry_rejects_at_monotonic_expiry_boundary() {
@@ -69,6 +82,32 @@ fn registry_rejects_sequence_zero_without_binding_the_source() {
 }
 
 #[test]
+fn registry_rejects_packets_beyond_the_fixed_ceiling() {
+    let test_id = [0x23; 16];
+    let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152);
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let registry = SessionRegistry::with_session(test_id, deadline);
+
+    for sequence in 1..=MAX_SESSION_PACKETS {
+        assert!(
+            registry
+                .authorize_uplink(test_id, source, sequence, std::time::Instant::now())
+                .is_some()
+        );
+    }
+    assert!(
+        registry
+            .authorize_uplink(
+                test_id,
+                source,
+                MAX_SESSION_PACKETS + 1,
+                std::time::Instant::now(),
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn concurrent_first_sources_produce_exactly_one_binding() {
     let test_id = [0x33; 16];
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
@@ -121,6 +160,170 @@ fn unknown_session_is_not_authorized() {
 }
 
 #[test]
+fn probe_serves_a_bounded_authenticated_packet_train() {
+    let session_id = [0x77; 16];
+    let key = [0x22; 32];
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback probe");
+    let probe_address = probe_socket.local_addr().expect("read probe address");
+    let session = LocalSession::new(session_id, key, SystemTime::now() + Duration::from_secs(2));
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
+    let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback agent");
+    agent_socket
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .expect("set receive timeout");
+
+    for sequence in 1..=MAX_SESSION_PACKETS {
+        let uplink = Packet::new(session_id, Direction::Uplink, sequence, 0, vec![0_u8; 172]);
+        agent_socket
+            .send_to(&uplink.encode(&key), probe_address)
+            .expect("send authenticated uplink");
+
+        let mut buffer = [0_u8; 1_272];
+        let (received, source) = agent_socket
+            .recv_from(&mut buffer)
+            .expect("receive authenticated downlink");
+        assert_eq!(source, probe_address);
+        let downlink = Packet::decode(&buffer[..received], &key).expect("decode downlink");
+        assert_eq!(downlink.direction(), Direction::Downlink);
+        assert_eq!(downlink.sequence_number(), sequence);
+    }
+
+    let run = probe_thread.join().expect("probe thread must not panic");
+    assert_eq!(run.accepted_packets, MAX_SESSION_PACKETS);
+    assert_eq!(run.responses_sent, MAX_SESSION_PACKETS);
+}
+
+#[test]
+fn malformed_datagram_is_silent_and_does_not_end_the_session() {
+    let session_id = [0x70; 16];
+    let key = [0x22; 32];
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
+    let probe_address = probe_socket.local_addr().expect("probe address");
+    let session = LocalSession::new(
+        session_id,
+        key,
+        SystemTime::now() + Duration::from_millis(300),
+    );
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
+    let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind agent");
+    agent_socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("set timeout");
+
+    agent_socket
+        .send_to(&[0_u8; 12], probe_address)
+        .expect("send malformed datagram");
+    let mut buffer = [0_u8; 1_272];
+    assert!(agent_socket.recv_from(&mut buffer).is_err());
+
+    let valid = Packet::new(session_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
+    agent_socket
+        .send_to(&valid.encode(&key), probe_address)
+        .expect("send valid uplink");
+    receive_downlink(&agent_socket, &key, 1);
+
+    let run = probe_thread.join().expect("probe thread must not panic");
+    assert_eq!(run.accepted_packets, 1);
+    assert_eq!(run.responses_sent, 1);
+}
+
+#[test]
+fn replayed_sequence_is_silent_without_consuming_the_packet_budget() {
+    let session_id = [0x71; 16];
+    let key = [0x22; 32];
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
+    let probe_address = probe_socket.local_addr().expect("probe address");
+    let session = LocalSession::new(
+        session_id,
+        key,
+        SystemTime::now() + Duration::from_millis(300),
+    );
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
+    let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind agent");
+    agent_socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("set timeout");
+
+    let first = Packet::new(session_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
+    agent_socket
+        .send_to(&first.encode(&key), probe_address)
+        .expect("send first uplink");
+    receive_downlink(&agent_socket, &key, 1);
+    agent_socket
+        .send_to(&first.encode(&key), probe_address)
+        .expect("send replay");
+    let mut buffer = [0_u8; 1_272];
+    assert!(agent_socket.recv_from(&mut buffer).is_err());
+
+    let second = Packet::new(session_id, Direction::Uplink, 2, 0, vec![0_u8; 172]);
+    agent_socket
+        .send_to(&second.encode(&key), probe_address)
+        .expect("send increasing uplink");
+    receive_downlink(&agent_socket, &key, 2);
+
+    let run = probe_thread.join().expect("probe thread must not panic");
+    assert_eq!(run.accepted_packets, 2);
+    assert_eq!(run.responses_sent, 2);
+}
+
+#[test]
+fn rebound_source_is_silent_without_changing_the_bound_source() {
+    let session_id = [0x72; 16];
+    let key = [0x22; 32];
+    let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
+    let probe_address = probe_socket.local_addr().expect("probe address");
+    let session = LocalSession::new(
+        session_id,
+        key,
+        SystemTime::now() + Duration::from_millis(300),
+    );
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
+    let bound_socket = UdpSocket::bind("127.0.0.1:0").expect("bind first agent");
+    let rebound_socket = UdpSocket::bind("127.0.0.1:0").expect("bind second agent");
+    bound_socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("set first timeout");
+    rebound_socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("set second timeout");
+
+    let first = Packet::new(session_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
+    bound_socket
+        .send_to(&first.encode(&key), probe_address)
+        .expect("send binding uplink");
+    receive_downlink(&bound_socket, &key, 1);
+
+    let second = Packet::new(session_id, Direction::Uplink, 2, 0, vec![0_u8; 172]);
+    rebound_socket
+        .send_to(&second.encode(&key), probe_address)
+        .expect("send rebound uplink");
+    let mut buffer = [0_u8; 1_272];
+    assert!(rebound_socket.recv_from(&mut buffer).is_err());
+    bound_socket
+        .send_to(&second.encode(&key), probe_address)
+        .expect("send bound-source uplink");
+    receive_downlink(&bound_socket, &key, 2);
+
+    let run = probe_thread.join().expect("probe thread must not panic");
+    assert_eq!(run.accepted_packets, 2);
+    assert_eq!(run.responses_sent, 2);
+}
+
+#[test]
+fn probe_stops_at_the_fixed_duration_ceiling() {
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
+    let session = LocalSession::new(
+        [0x73; 16],
+        [0x22; 32],
+        SystemTime::now() + Duration::from_secs(60),
+    );
+    let started_at = Instant::now();
+
+    assert_eq!(serve_session(socket, session), ProbeRun::default());
+    assert!(started_at.elapsed() <= MAX_SESSION_DURATION + Duration::from_secs(1));
+}
+
+#[test]
 fn probe_rejects_a_non_loopback_bind_address() {
     let socket = UdpSocket::bind("0.0.0.0:0").expect("bind wildcard test socket");
     let session = LocalSession::new(
@@ -129,7 +332,7 @@ fn probe_rejects_a_non_loopback_bind_address() {
         SystemTime::now() + Duration::from_secs(2),
     );
 
-    assert!(!serve_one(socket, session));
+    assert_eq!(serve_session(socket, session), ProbeRun::default());
 }
 
 #[test]
@@ -139,7 +342,7 @@ fn downlink_direction_sent_to_probe_receives_no_udp_response() {
     let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback probe");
     let probe_address = probe_socket.local_addr().expect("read probe address");
     let session = LocalSession::new(session_id, key, SystemTime::now() + Duration::from_secs(2));
-    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
 
     let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback client");
     agent_socket
@@ -155,7 +358,10 @@ fn downlink_direction_sent_to_probe_receives_no_udp_response() {
         agent_socket.recv_from(&mut buffer).is_err(),
         "probe must remain silent"
     );
-    assert!(!probe_thread.join().expect("probe thread must not panic"));
+    assert_eq!(
+        probe_thread.join().expect("probe thread must not panic"),
+        ProbeRun::default()
+    );
 }
 
 #[test]
@@ -165,7 +371,7 @@ fn expired_session_receives_no_udp_response() {
     let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
     let probe_address = probe_socket.local_addr().expect("probe address");
     let session = LocalSession::new(session_id, key, SystemTime::now() - Duration::from_secs(1));
-    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
     let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind agent");
     agent_socket
         .set_read_timeout(Some(Duration::from_millis(150)))
@@ -179,7 +385,10 @@ fn expired_session_receives_no_udp_response() {
         agent_socket.recv_from(&mut buffer).is_err(),
         "probe must remain silent"
     );
-    assert!(!probe_thread.join().expect("probe thread must not panic"));
+    assert_eq!(
+        probe_thread.join().expect("probe thread must not panic"),
+        ProbeRun::default()
+    );
 }
 
 #[test]
@@ -189,7 +398,7 @@ fn invalid_hmac_receives_no_udp_response() {
     let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind probe");
     let probe_address = probe_socket.local_addr().expect("probe address");
     let session = LocalSession::new(session_id, key, SystemTime::now() + Duration::from_secs(2));
-    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
     let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind agent");
     agent_socket
         .set_read_timeout(Some(Duration::from_millis(150)))
@@ -203,7 +412,10 @@ fn invalid_hmac_receives_no_udp_response() {
         agent_socket.recv_from(&mut buffer).is_err(),
         "probe must remain silent"
     );
-    assert!(!probe_thread.join().expect("probe thread must not panic"));
+    assert_eq!(
+        probe_thread.join().expect("probe thread must not panic"),
+        ProbeRun::default()
+    );
 }
 
 #[test]
@@ -213,7 +425,7 @@ fn unknown_test_id_receives_no_udp_response() {
     let probe_socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback probe");
     let probe_address = probe_socket.local_addr().expect("read probe address");
     let session = LocalSession::new(session_id, key, SystemTime::now() + Duration::from_secs(2));
-    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
 
     let agent_socket = UdpSocket::bind("127.0.0.1:0").expect("bind loopback client");
     agent_socket
@@ -233,5 +445,8 @@ fn unknown_test_id_receives_no_udp_response() {
         error.kind(),
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
     ));
-    assert!(!probe_thread.join().expect("probe thread must not panic"));
+    assert_eq!(
+        probe_thread.join().expect("probe thread must not panic"),
+        ProbeRun::default()
+    );
 }

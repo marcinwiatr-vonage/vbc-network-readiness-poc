@@ -16,11 +16,11 @@ Assets to protect:
 
 | Threat | Risk | Required controls |
 |---|---|---|
-| UDP reflection or amplification | Probe sends traffic to a victim. | One-time authenticated session; first-verified-source `IP:port` binding; no client-provided destination; bounded response size/rate/duration; no echo; silence for unknown traffic. |
+| UDP reflection or amplification | Probe sends traffic to a victim. | One-time authenticated session; atomic first-verified-source `IP:port` binding; no client-provided destination; one fixed response per admitted uplink; local hard ceilings of 32 admitted packets and two seconds; no echo; silence for unknown traffic. |
 | Session replay | Reused material creates traffic or corrupts results. | Single-use test ID, short expiry, atomic state transition, HMAC, source binding, and replay tests. |
 | Forged frame or result | False diagnostic conclusion. | Exact v2 framing, per-session HMAC-SHA256, strict schema/range validation, and separately attributed agent/probe observations. |
 | Parser denial of service | Malformed input crashes the probe or consumes memory/CPU. | Reject frames under 68 bytes; validate magic/version/direction before session lookup; reject payload length over 1200 before allocation; require exact length up to 1268; verify HMAC; fuzz/error-path tests; unprivileged Rust containers. |
-| Resource exhaustion | CPU, sockets, bandwidth, or spend exhaustion. | Per-source/session/concurrency limits, fixed payload/rate/duration ceilings, timeouts, budgets, alerts, monitoring, and an ingress disable/destroy runbook. |
+| Resource exhaustion | CPU, sockets, bandwidth, or spend exhaustion. | The local loop has a fixed 32-packet admission ceiling and a monotonic two-second duration ceiling; future public operation additionally requires per-source/session/concurrency creation and packet-rate limits, budgets, alerts, monitoring, and an ingress disable/destroy runbook. |
 | Probe impersonation or target substitution | Agent sends authenticated data to an unintended target. | HTTPS-authenticated session response, explicit configured probe ID/host/port, agent allowlist/session binding, and no client-controlled UDP destination. |
 | Sensitive data retention | Privacy or compliance exposure. | No customer data, credentials, payload logs, or persistent raw IP by default; minimise/hash where needed; documented retention/deletion policy. |
 | Credential leakage | Infrastructure or source compromise. | No secrets in source/chat/logs, least privilege, short-lived roles where available, secret scanning, root MFA, and rotation/revocation procedure. |
@@ -33,9 +33,9 @@ Assets to protect:
 2. A validly framed packet with an unknown test ID produces no response.
 3. Expired, replayed, invalid-HMAC, wrong-direction, and source-mismatched frames produce no response.
 4. A session cannot direct probe traffic to an address other than the first validated endpoint source `IP:port`.
-5. Packet-rate, duration, payload-size, concurrent-session, and creation-rate ceilings are enforced.
+5. The local loop enforces its 32-admitted-packet and two-second ceilings. Packet-rate, concurrent-session, and creation-rate ceilings remain mandatory before public exposure.
 6. Frames shorter than 68 bytes, larger than 1268 bytes, invalid magic/version/direction, payload lengths above 1200, and length mismatches are rejected without process crash or unbounded allocation.
-7. The local bootstrap probe rejects a non-loopback bind address, accepts only an explicitly supplied session ID/key and uplink direction, and cannot accept a response destination from the client.
+7. The local probe rejects a non-loopback bind address, accepts only an explicitly supplied session ID/key and uplink direction, binds the first authenticated source atomically, admits only strictly increasing non-zero uplink sequences, and cannot accept a response destination from the client.
 8. The agent accepts only authenticated downlink frames for its active session from the selected probe endpoint.
 9. Result submission cannot overwrite another session or create a second authoritative result.
 10. The externally provisioned UDP listener is exactly `10000` or `16384`; no unapproved listener is exposed, and unknown traffic remains silent from a non-local network.

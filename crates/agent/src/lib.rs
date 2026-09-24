@@ -5,6 +5,9 @@ use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
+/// Fixed packet count for the local Milestone 1 packet train.
+pub const LOCAL_PACKET_COUNT: u32 = 32;
+
 /// Counts from one completed local loopback exchange.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalRun {
@@ -12,7 +15,7 @@ pub struct LocalRun {
     pub downlink_received: u64,
 }
 
-/// Runs one authenticated request/response exchange with a loopback probe.
+/// Runs one bounded authenticated packet train with a loopback probe.
 pub fn run_local_test(
     probe_address: SocketAddr,
     test_id: [u8; 16],
@@ -29,29 +32,37 @@ pub fn run_local_test(
     let socket = UdpSocket::bind("127.0.0.1:0")?;
     socket.set_read_timeout(Some(response_timeout))?;
 
-    let uplink = Packet::new(test_id, Direction::Uplink, 1, 0, vec![0_u8; 172]);
-    socket.send_to(&uplink.encode(&key), probe_address)?;
-
+    let mut run = LocalRun {
+        uplink_sent: 0,
+        downlink_received: 0,
+    };
     let mut buffer = [0_u8; 1_272];
-    let (received, source) = socket.recv_from(&mut buffer)?;
-    if source != probe_address {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "response came from an unexpected source",
-        ));
+    for sequence in 1..=LOCAL_PACKET_COUNT {
+        let uplink = Packet::new(test_id, Direction::Uplink, sequence, 0, vec![0_u8; 172]);
+        socket.send_to(&uplink.encode(&key), probe_address)?;
+        run.uplink_sent += 1;
+
+        let (received, source) = socket.recv_from(&mut buffer)?;
+        if source != probe_address {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "response came from an unexpected source",
+            ));
+        }
+
+        let response = Packet::decode(&buffer[..received], &key)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if response.test_id() != test_id
+            || response.direction() != Direction::Downlink
+            || response.sequence_number() != sequence
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "response has an unexpected session, direction, or sequence",
+            ));
+        }
+        run.downlink_received += 1;
     }
 
-    let response = Packet::decode(&buffer[..received], &key)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if response.test_id() != test_id || response.direction() != Direction::Downlink {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "response has an unexpected session or direction",
-        ));
-    }
-
-    Ok(LocalRun {
-        uplink_sent: 1,
-        downlink_received: 1,
-    })
+    Ok(run)
 }

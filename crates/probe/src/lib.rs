@@ -2,7 +2,12 @@
 
 use protocol::{Direction, Packet};
 use std::net::{SocketAddr, UdpSocket};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+/// Hard ceiling for authenticated uplink packets admitted by one local session.
+pub const MAX_SESSION_PACKETS: u32 = 32;
+/// Hard monotonic runtime ceiling for one local session.
+pub const MAX_SESSION_DURATION: Duration = Duration::from_secs(2);
 
 /// Result of checking whether an incoming frame may activate a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +25,7 @@ struct SessionState {
     deadline: std::time::Instant,
     source: Option<SocketAddr>,
     last_sequence: Option<u32>,
+    admitted_packets: u32,
 }
 
 /// Immutable authorization to send only to the verified source endpoint.
@@ -45,6 +51,7 @@ impl SessionRegistry {
                 deadline,
                 source: None,
                 last_sequence: None,
+                admitted_packets: 0,
             },
         );
         Self {
@@ -74,6 +81,7 @@ impl SessionRegistry {
         let state = sessions.get_mut(&test_id)?;
         if now >= state.deadline
             || sequence == 0
+            || state.admitted_packets >= MAX_SESSION_PACKETS
             || state.last_sequence.is_some_and(|last| sequence <= last)
         {
             return None;
@@ -85,6 +93,7 @@ impl SessionRegistry {
         };
         state.source = Some(destination);
         state.last_sequence = Some(sequence);
+        state.admitted_packets += 1;
         Some(SendPermit { destination })
     }
 }
@@ -123,47 +132,83 @@ fn checked_deadline(now: Instant, remaining: std::time::Duration) -> Instant {
     now.checked_add(remaining).unwrap_or(now)
 }
 
-/// Receives one validated uplink frame and emits one fixed downlink frame.
+/// Counts from one bounded local probe loop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProbeRun {
+    pub accepted_packets: u32,
+    pub responses_sent: u32,
+}
+
+/// Runs one loopback-only, authenticated, bounded local probe session.
 ///
-/// Every rejection path returns `false` without sending a UDP response.
-pub fn serve_one(socket: UdpSocket, session: LocalSession) -> bool {
+/// Invalid traffic is rejected silently and does not consume the packet budget.
+pub fn serve_session(socket: UdpSocket, mut session: LocalSession) -> ProbeRun {
+    let started_at = Instant::now();
+    session.deadline = session
+        .deadline
+        .min(checked_deadline(started_at, MAX_SESSION_DURATION));
+    serve_bounded(socket, session)
+}
+
+fn serve_bounded(socket: UdpSocket, session: LocalSession) -> ProbeRun {
+    let mut run = ProbeRun::default();
     let Ok(bound_address) = socket.local_addr() else {
-        return false;
+        return run;
     };
     if !bound_address.ip().is_loopback() {
-        return false;
+        return run;
     }
 
     let registry = SessionRegistry::with_session(session.test_id, session.deadline);
     let mut buffer = [0_u8; 1_272];
-    let Ok((received, source)) = socket.recv_from(&mut buffer) else {
-        return false;
-    };
+    while run.accepted_packets < MAX_SESSION_PACKETS {
+        let now = Instant::now();
+        if now >= session.deadline {
+            break;
+        }
+        if socket
+            .set_read_timeout(Some(session.deadline.duration_since(now)))
+            .is_err()
+        {
+            break;
+        }
 
-    if Instant::now() >= session.deadline {
-        return false;
+        let (received, source) = match socket.recv_from(&mut buffer) {
+            Ok(received) => received,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        let Ok(packet) = Packet::decode(&buffer[..received], &session.key) else {
+            continue;
+        };
+        if packet.test_id() != session.test_id || packet.direction() != Direction::Uplink {
+            continue;
+        }
+        let Some(permit) = registry.authorize_uplink(
+            packet.test_id(),
+            source,
+            packet.sequence_number(),
+            Instant::now(),
+        ) else {
+            continue;
+        };
+
+        run.accepted_packets += 1;
+        let response = Packet::new(
+            session.test_id,
+            Direction::Downlink,
+            run.accepted_packets,
+            0,
+            vec![0_u8; 172],
+        );
+        if socket
+            .send_to(&response.encode(&session.key), permit.destination())
+            .is_ok()
+        {
+            run.responses_sent += 1;
+        }
     }
-
-    let Ok(packet) = Packet::decode(&buffer[..received], &session.key) else {
-        return false;
-    };
-
-    if packet.test_id() != session.test_id || packet.direction() != Direction::Uplink {
-        return false;
-    }
-    let Some(permit) = registry.authorize_uplink(
-        packet.test_id(),
-        source,
-        packet.sequence_number(),
-        Instant::now(),
-    ) else {
-        return false;
-    };
-
-    let response = Packet::new(session.test_id, Direction::Downlink, 1, 0, vec![0_u8; 172]);
-    socket
-        .send_to(&response.encode(&session.key), permit.destination())
-        .is_ok()
+    run
 }
 
 #[cfg(test)]

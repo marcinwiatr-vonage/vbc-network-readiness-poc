@@ -1,5 +1,5 @@
 use agent::run_local_test;
-use probe::{LocalSession, serve_one};
+use probe::{LocalSession, MAX_SESSION_PACKETS, serve_session};
 use protocol::{Direction, Packet};
 use std::net::UdpSocket;
 use std::thread;
@@ -37,11 +37,13 @@ fn agent_completes_an_authenticated_loopback_exchange() {
     let probe_address = probe_socket.local_addr().expect("read probe address");
     let session = LocalSession::new(test_id, key, SystemTime::now() + Duration::from_secs(2));
 
-    let probe_thread = thread::spawn(move || serve_one(probe_socket, session));
+    let probe_thread = thread::spawn(move || serve_session(probe_socket, session));
     let result = run_local_test(probe_address, test_id, key, Duration::from_millis(500))
         .expect("agent must receive a valid local response");
 
-    assert_eq!(result.uplink_sent, 1);
-    assert_eq!(result.downlink_received, 1);
-    assert!(probe_thread.join().expect("probe thread must not panic"));
+    assert_eq!(result.uplink_sent, u64::from(MAX_SESSION_PACKETS));
+    assert_eq!(result.downlink_received, u64::from(MAX_SESSION_PACKETS));
+    let probe_run = probe_thread.join().expect("probe thread must not panic");
+    assert_eq!(probe_run.accepted_packets, MAX_SESSION_PACKETS);
+    assert_eq!(probe_run.responses_sent, MAX_SESSION_PACKETS);
 }

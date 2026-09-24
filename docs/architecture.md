@@ -77,13 +77,13 @@ The header is 36 bytes; the authentication tag is 32 bytes. A zero-payload frame
 
 Sequence numbers are independent `u32` streams in each direction. Wraparound behavior must be deliberately specified and tested before release; it is not inferred by the wire decoder.
 
-## Local session lifecycle and replay policy
+## Local session lifecycle, bounds, and replay policy
 
 Milestone 1 registry entries use an injected **monotonic** deadline; an entry is expired when `now >= deadline`, regardless of wall-clock changes. Conversion from the local bootstrap API's wall-clock expiry uses checked monotonic arithmetic and fails closed when the duration cannot be represented. “Single-use” means one atomic transition from unbound to the first verified source `IP:port`, followed by one bounded active lifetime—not one accepted packet.
 
-During that lifetime, the registry authorizes only authenticated uplink frames from the bound source with a non-zero, strictly increasing sequence number. Gaps are permitted so loss can be measured; duplicate, lower, zero, and out-of-order frames are rejected. Each successful authorization returns a short immutable permit whose destination is exclusively the observed bound source.
+During that lifetime, the registry authorizes only authenticated uplink frames from the bound source with a non-zero, strictly increasing sequence number. Gaps are permitted so loss can be measured; duplicate, lower, zero, and out-of-order frames are silently rejected. Each successful authorization returns a short immutable permit whose destination is exclusively the observed bound source. Expiry, source binding, replay admission, and the packet ceiling are checked and mutated atomically before that permit is returned.
 
-The current `serve_one` bootstrap integrates this registry for exactly one validated request and one fixed response. It does not yet preserve registry state across a packet train or implement terminal completion. The bounded multi-packet receive loop, duration/packet ceilings, persistent per-session integration, and completion transition remain Milestone 1 work.
+The implemented local receive loop binds only to an IPv4 or IPv6 loopback address and admits at most **32 authenticated uplink packets**. Its effective monotonic deadline is the earlier of the session deadline and **two seconds after loop start**. Each admitted uplink produces one fixed 172-byte-payload downlink frame, numbered from 1 in admission order and sent only to the permit destination. Reaching the packet ceiling or effective deadline terminates the loop; malformed, invalid-HMAC, unknown-session, expired, replayed/out-of-order, wrong-direction, or source-rebound traffic produces no response and does not consume the admitted-packet budget. Terminal completion state beyond loop termination remains deferred Milestone 1 work.
 
 
 ```text

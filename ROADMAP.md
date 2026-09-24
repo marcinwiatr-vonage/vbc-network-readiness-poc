@@ -32,9 +32,10 @@ This roadmap is ordered by risk: protocol correctness and abuse resistance prece
 - [x] Frame bounds: 68-byte minimum, 1268-byte maximum, and 1200-byte payload ceiling.
 - [x] Round-trip test proving authenticated binary encoding/decoding.
 - [ ] TDD negative-path tests for invalid HMAC, modified payload/tag, short frame, invalid magic/version/direction, oversized payload, and declared-length mismatch.
-- [ ] In-memory session registry with expiry and a single bound source address/port.
+- [x] In-memory session registry with monotonic expiry, atomic first-source binding, strictly increasing uplink admission, and a fixed packet ceiling.
 - [x] Loopback probe handler accepts an explicit known session and stays silent for an unknown test ID.
 - [x] Loopback integration test proves a valid full-duplex exchange and no response for an unknown session.
+- [x] Bounded local receive loop admits at most 32 packets within two seconds and remains silent for malformed, invalid-HMAC, expired, replayed, wrong-direction, and rebound traffic.
 
 ### Required tests
 
