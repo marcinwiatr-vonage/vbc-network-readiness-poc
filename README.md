@@ -181,14 +181,14 @@ import secrets, tempfile, time
 from pathlib import Path
 
 path = Path(tempfile.gettempdir()) / "nrp-local.session"
-path.write_text(
-    "NRP-LOCAL-SESSION-V1\n"
-    f"test_id_hex={secrets.token_hex(16)}\n"
-    f"hmac_key_hex={secrets.token_hex(32)}\n"
-    f"expires_at_unix_seconds={int(time.time()) + 60}\n"
-    "probe_address=127.0.0.1:10000\n",
-    encoding="utf-8",
-)
+with path.open("w", encoding="utf-8", newline="") as session_file:
+    session_file.write(
+        "NRP-LOCAL-SESSION-V1\n"
+        f"test_id_hex={secrets.token_hex(16)}\n"
+        f"hmac_key_hex={secrets.token_hex(32)}\n"
+        f"expires_at_unix_seconds={int(time.time()) + 60}\n"
+        "probe_address=127.0.0.1:10000\n"
+    )
 print(path)
 PY
 ```
