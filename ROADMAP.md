@@ -57,12 +57,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Deliverables
 
-- [ ] `proto/result.schema.json`.
-- [ ] Directional metric calculator: sent/received, loss, duplicates, reordering, jitter p50/p95, and throughput.
-- [ ] RTT calculator with min/mean/p95.
+- [x] `proto/result.schema.json`.
+- [x] Directional metric calculator: sent/received, loss, duplicates, reordering, jitter p50/p95, and throughput.
+- [x] RTT calculator with min/mean/p95.
 - [ ] JSON output from agent and server-side validation at result ingestion.
-- [ ] Result fixtures for clean link, directional loss, high jitter, and no probe response.
-- [ ] Contract tests for `null` metric values and `not_tested` fields where measurement did not occur.
+- [x] Result fixtures for clean link, directional loss, high jitter, and no probe response.
+- [x] Contract tests for `null` metric values and `not_tested` fields where measurement did not occur.
 - [ ] Agent cancellation and timeout paths.
 
 ### Mandatory semantics
@@ -127,6 +127,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Objective:** present evidence without hiding diagnostic context.
 
+- [x] Define the report presentation mapping for metadata, reachability, directional evidence, unavailable values, optional public IP, and threshold-backed conditions in [docs/report-presentation.md](report-presentation.md).
 - [ ] Minimal report page by test ID.
 - [ ] Display test timestamp, selected probe ID/region, protocol/report schema versions, agent version, duration, UL/DL loss, p50/p95 jitter, RTT, throughput, warnings, and status.
 - [ ] Render unavailable or omitted measurements as `null`/`not_tested`, never as zero or an invented result.

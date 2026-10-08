@@ -1,0 +1,45 @@
+{
+  "report_schema_version": 1,
+  "protocol_version": 2,
+  "test_id": "22334455667788990011aabbccddeeff",
+  "status": "SESSION_REJECTED",
+  "started_at": "2026-09-24T18:04:00Z",
+  "ended_at": "2026-09-24T18:04:00Z",
+  "environment": {
+    "connection_type": "unknown",
+    "probe_id": "local-1",
+    "probe_region": "local",
+    "udp_port": 10000,
+    "agent_version": "0.1.0"
+  },
+  "profile": {
+    "name": "udp-baseline-v1",
+    "payload_bytes": 172,
+    "target_packet_rate": 4,
+    "measurement_duration_ms": 1000
+  },
+  "upstream": {
+    "observer": "probe",
+    "packets_sent": null,
+    "packets_received": null,
+    "duplicates": null,
+    "out_of_order": null,
+    "loss_pct": null,
+    "jitter_ms_p50": null,
+    "jitter_ms_p95": null,
+    "throughput_kbps": null
+  },
+  "downstream": {
+    "observer": "agent",
+    "packets_sent": null,
+    "packets_received": null,
+    "duplicates": null,
+    "out_of_order": null,
+    "loss_pct": null,
+    "jitter_ms_p50": null,
+    "jitter_ms_p95": null,
+    "throughput_kbps": null
+  },
+  "rtt_ms": { "min": null, "mean": null, "p95": null },
+  "reachability": { "protocol": "udp", "port": 10000, "status": "not_tested" }
+}

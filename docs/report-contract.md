@@ -2,7 +2,7 @@
 
 This document defines the report shape, field ownership, persistence limits, and unavailable-value semantics for Network Readiness Probe. It is a requirements contract for measurements against this project's controlled endpoints.
 
-The Milestone 1 local agent/probe CLI JSON is a bootstrap run summary only. It is not this report contract, is not persisted, and deliberately omits directional quality metrics until the Milestone 2 calculators and versioned result schema exist.
+The Milestone 1 local agent/probe CLI JSON is a bootstrap run summary only. It is not this report contract, is not persisted, and deliberately omits directional quality metrics. The canonical Milestone 2 result contract is JSON Schema draft 2020-12 at `proto/result.schema.json`; `report_schema_version` is integer `1`.
 
 ## Report principles
 
@@ -35,9 +35,9 @@ The Milestone 1 local agent/probe CLI JSON is a bootstrap run summary only. It i
 | Field | MVP | Source of truth / definition |
 |---|---:|---|
 | `profile` | Yes | Selected named packet profile and its documented parameters. |
-| `upstream.packets_*`, loss, jitter, throughput | Yes | Probe-observed authenticated UL stream. |
-| `downstream.packets_*`, loss, jitter, throughput | Yes | Agent-observed authenticated DL stream. |
-| `rtt_ms` | Yes | Agent monotonic elapsed time for matching authenticated request/response pairs. |
+| `upstream.packets_sent`, `packets_received`, `duplicates`, `out_of_order`, `loss_pct`, jitter, throughput | Yes | Probe-observed authenticated UL stream. |
+| `downstream.packets_sent`, `packets_received`, `duplicates`, `out_of_order`, `loss_pct`, jitter, throughput | Yes | Agent-observed authenticated DL stream. |
+| `rtt_ms.min`, `mean`, `p95` | Yes | Agent monotonic elapsed time for matching authenticated request/response pairs. |
 | `estimated_supported_calls` | Later | Only after the configured profile and degradation rule are documented and tested. |
 | `mos` | Later | Only after documented codec, packetization, impairment, delay, formula, and validation. |
 | `sip_alg` | Later, optional | Isolated controlled marker test only; never credentials, arbitrary destinations, or production targets. |
@@ -70,31 +70,32 @@ Any configured threshold set must carry a `threshold_version`, list its units an
 | User cancellation before completed window | `CANCELLED` | `null` unless a completed measurement value is explicitly safe and documented. | `not_tested` where the check was skipped. |
 | Internal failure | `INTERNAL_ERROR` | `null` unless independently completed and explicitly marked safe. | `not_tested` where no observation exists. |
 
-## Example result structure
+## Canonical result example
 
-The example is illustrative only; final field names are fixed by the versioned result schema.
+This example follows `proto/result.schema.json`. Fixture files under `proto/fixtures/` are executable contract examples.
 
 ```json
 {
   "report_schema_version": 1,
   "protocol_version": 2,
-  "test_id": "opaque-id",
+  "test_id": "00112233445566778899aabbccddeeff",
   "status": "COMPLETED",
   "started_at": "2026-09-23T18:35:00Z",
   "ended_at": "2026-09-23T18:36:00Z",
   "environment": {
     "connection_type": "ethernet",
-    "public_ip_display": "203.0.113.xxx",
     "probe_id": "fra-1",
     "probe_region": "fra",
     "udp_port": 10000,
     "agent_version": "0.1.0"
   },
-  "profile": {"name": "udp-baseline-v1", "payload_bytes": 172, "target_packet_rate": 100},
+  "profile": {"name": "udp-baseline-v1", "payload_bytes": 172, "target_packet_rate": 100, "measurement_duration_ms": 60000},
   "upstream": {
     "observer": "probe",
     "packets_sent": 6000,
     "packets_received": 5998,
+    "duplicates": 0,
+    "out_of_order": 0,
     "loss_pct": 0.033,
     "jitter_ms_p50": 0.5,
     "jitter_ms_p95": 1.2,
@@ -104,16 +105,18 @@ The example is illustrative only; final field names are fixed by the versioned r
     "observer": "agent",
     "packets_sent": 6000,
     "packets_received": 6000,
+    "duplicates": 0,
+    "out_of_order": 0,
     "loss_pct": 0.0,
     "jitter_ms_p50": 0.5,
     "jitter_ms_p95": 1.3,
     "throughput_kbps": 137.7
   },
   "rtt_ms": {"min": 11.0, "mean": 12.0, "p95": 16.0},
-  "reachability": {"protocol": "udp", "port": 10000, "status": "bidirectional"},
-  "sip_alg": {"status": "not_tested"},
-  "mos": {"upstream": null, "downstream": null}
+  "reachability": {"protocol": "udp", "port": 10000, "status": "bidirectional"}
 }
 ```
+
+For `UDP_UNREACHABLE_OR_BLOCKED`, every metric field inside `upstream`, `downstream`, and `rtt_ms` is JSON `null`; directional `observer` attribution remains present, and zero would falsely claim a completed measurement. `reachability.status` is `no_validated_response`. For a session rejected before UDP measurement, `reachability.status` is `not_tested`, which is distinct from an attempted measurement with no validated response. Result schema v1 requires null measurements for every non-`COMPLETED` status; retaining independently completed partial values requires a future schema version. The schema deliberately contains no MOS or generic-capacity field.
 
 Packet payloads, one-time HMAC material, and raw source IP are never report fields or persistent result fields.

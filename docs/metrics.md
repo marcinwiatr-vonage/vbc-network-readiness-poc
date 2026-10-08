@@ -4,23 +4,23 @@ This document defines Network Readiness Probe measurement terms, units, source o
 
 ## Time base and frame inputs
 
-Use a monotonic clock for packet scheduling, test duration, RTT elapsed time, and receive inter-arrival calculations. UTC is allowed only for report timestamps and session expiry. The v1 frame carries an `i64` monotonic send timestamp at offsets 26–33; it is not a synchronized timestamp and cannot establish one-way latency.
+Use a monotonic clock for packet scheduling, test duration, RTT elapsed time, and receive inter-arrival calculations. UTC is allowed only for report timestamps and session expiry. The v2 frame carries an `i64` monotonic send timestamp at offsets 26–33; it is not a synchronized timestamp and cannot establish one-way latency.
 
-Each valid v1 frame has an independent direction and `u32` sequence stream. Only frames that pass fixed-length validation, HMAC verification, session/expiry checks, expected-direction checks, and source-binding checks can contribute to a measurement.
+Each valid v2 frame has an independent direction and `u32` sequence stream. Only frames that pass fixed-length validation, HMAC verification, session/expiry checks, expected-direction checks, and source-binding checks can contribute to a measurement.
 
 ## Packet accounting
 
 Each direction has an independent monotonically increasing sequence number.
 
-- `packets_sent`: frames deliberately emitted within the measurement window.
-- `packets_received`: valid authenticated frames received within that window.
+- `packets_sent`: frames deliberately emitted within the measurement window; the MVP sequence range is exactly `1..=packets_sent` and zero is invalid.
+- `packets_received`: valid, first-seen authenticated frames in that expected sequence range. Duplicate datagrams are not counted again.
 - `duplicates`: valid frames whose sequence was already observed.
 - `out_of_order`: valid first-seen frames whose sequence is lower than the greatest first-seen sequence.
-- `missing`: expected sequence numbers absent after the defined reordering grace period.
+- `missing`: `packets_sent - packets_received`, evaluated after the bounded measurement window provides the reordering grace period.
 
 `loss_pct = 100 × missing / expected_packets`.
 
-Do not count malformed, unauthenticated, wrong-direction, expired-session, or out-of-window datagrams as received frames. A zero expected-packet count yields `null`, not `0%`. Sequence-number wraparound semantics require a tested implementation decision before release.
+Do not pass malformed, unauthenticated, wrong-direction, expired-session, out-of-window, zero-sequence, or above-range datagrams into the calculator. The calculator rejects zero or above-range sequence numbers rather than silently contaminating a result. A zero expected-packet count yields `null`, not `0%`. The MVP packet ceiling prevents sequence-number wraparound; a future profile that can wrap must define and test new semantics first.
 
 ## Directional source of truth
 
@@ -33,15 +33,15 @@ The probe produces authoritative uplink receipt metrics. The agent produces auth
 
 ## Jitter
 
-MVP jitter is receive inter-arrival variation for valid, first-seen packets in a single direction. For consecutive eligible packets, calculate inter-arrival deltas from the receiver's monotonic clock; derive the documented variation sample in a pure function. Exclude duplicate, malformed, unauthenticated, out-of-window, and unavailable samples consistently.
+MVP jitter is receive inter-arrival variation for valid, first-seen packets in one direction. Preserve receiver observation order and require non-decreasing monotonic receive timestamps. Calculate each inter-arrival interval between consecutive eligible packets, then calculate each jitter sample as the absolute difference between consecutive inter-arrival intervals. Three eligible packets therefore produce one jitter sample. Exclude duplicates, malformed, unauthenticated, out-of-window, and unavailable samples consistently.
 
-Report `jitter_ms_p50` and `jitter_ms_p95`. A percentile is not an average. The report must identify the receiving observer and direction. If a later RTP-compatible RFC 3550 estimator is added, expose it as a separately named field rather than silently replacing this definition.
+Report `jitter_ms_p50` and `jitter_ms_p95` using the nearest-rank percentile: sort samples ascending and select rank `ceil(p × N)`, with ranks starting at one. A percentile is not an average. The report must identify the receiving observer and direction. If a later RTP-compatible RFC 3550 estimator is added, expose it as a separately named field rather than silently replacing this definition.
 
 Use `null` when too few eligible samples exist for the defined percentile calculation.
 
 ## RTT
 
-RTT is elapsed monotonic time between a timestamp request and its corresponding authenticated response. Report `rtt_ms_min`, `rtt_ms_mean`, and `rtt_ms_p95` with units of milliseconds.
+RTT is elapsed monotonic time between a timestamp request and its corresponding authenticated response. Report `rtt_ms_min`, `rtt_ms_mean`, and nearest-rank `rtt_ms_p95` with units of milliseconds. The mean is the arithmetic mean of all eligible samples.
 
 RTT is not one-way latency. The project does not estimate one-way latency without a validated clock-synchronization design. If no corresponding response is observed, every RTT aggregate is `null`.
 
@@ -49,7 +49,7 @@ RTT is not one-way latency. The project does not estimate one-way latency withou
 
 `throughput_kbps = (received_payload_bytes × 8) / measurement_seconds / 1000`.
 
-Report received **payload** throughput separately for uplink and downlink. It excludes the 36-byte frame header, 32-byte HMAC tag, and IP/UDP overhead. Any future wire-rate estimate must be separately named and document all overhead assumptions. A non-positive measurement duration produces `null`.
+Report received **payload** throughput separately for uplink and downlink. Sum payload bytes from valid first-seen packets only; duplicates do not increase throughput. It excludes the 36-byte frame header, 32-byte HMAC tag, and IP/UDP overhead. Any future wire-rate estimate must be separately named and document all overhead assumptions. A zero measurement duration produces `null`.
 
 ## Reachability and status outcomes
 

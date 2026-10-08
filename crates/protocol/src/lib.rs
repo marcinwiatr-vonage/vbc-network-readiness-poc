@@ -1,5 +1,7 @@
 //! Versioned binary wire protocol for authenticated network-readiness frames.
 
+pub mod metrics;
+
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

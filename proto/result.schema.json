@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://network-readiness-probe.invalid/schemas/result-v1.json",
+  "title": "Network Readiness Probe result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "report_schema_version",
+    "protocol_version",
+    "test_id",
+    "status",
+    "started_at",
+    "ended_at",
+    "environment",
+    "profile",
+    "upstream",
+    "downstream",
+    "rtt_ms",
+    "reachability"
+  ],
+  "properties": {
+    "report_schema_version": { "const": 1 },
+    "protocol_version": { "const": 2 },
+    "test_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "status": {
+      "enum": [
+        "COMPLETED",
+        "UDP_UNREACHABLE_OR_BLOCKED",
+        "SESSION_REJECTED",
+        "CANCELLED",
+        "INTERNAL_ERROR"
+      ]
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "environment": { "$ref": "#/$defs/environment" },
+    "profile": { "$ref": "#/$defs/profile" },
+    "upstream": {
+      "$ref": "#/$defs/directional_metrics",
+      "properties": { "observer": { "const": "probe" } }
+    },
+    "downstream": {
+      "$ref": "#/$defs/directional_metrics",
+      "properties": { "observer": { "const": "agent" } }
+    },
+    "rtt_ms": { "$ref": "#/$defs/rtt_metrics" },
+    "reachability": { "$ref": "#/$defs/reachability" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "COMPLETED" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "reachability": {
+            "properties": { "status": { "const": "bidirectional" } },
+            "required": ["status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": ["UDP_UNREACHABLE_OR_BLOCKED", "SESSION_REJECTED", "CANCELLED", "INTERNAL_ERROR"]
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "upstream": {
+            "allOf": [
+              { "$ref": "#/$defs/directional_metrics" },
+              { "$ref": "#/$defs/unavailable_directional_metrics" }
+            ]
+          },
+          "downstream": {
+            "allOf": [
+              { "$ref": "#/$defs/directional_metrics" },
+              { "$ref": "#/$defs/unavailable_directional_metrics" }
+            ]
+          },
+          "rtt_ms": {
+            "allOf": [
+              { "$ref": "#/$defs/rtt_metrics" },
+              { "$ref": "#/$defs/unavailable_rtt_metrics" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "UDP_UNREACHABLE_OR_BLOCKED" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "reachability": {
+            "properties": { "status": { "const": "no_validated_response" } },
+            "required": ["status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["SESSION_REJECTED", "CANCELLED", "INTERNAL_ERROR"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "reachability": {
+            "properties": { "status": { "const": "not_tested" } },
+            "required": ["status"]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nullable_non_negative_integer": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "nullable_non_negative_number": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connection_type", "probe_id", "probe_region", "udp_port", "agent_version"],
+      "properties": {
+        "connection_type": { "enum": ["ethernet", "wifi", "unknown"] },
+        "probe_id": { "type": "string", "minLength": 1 },
+        "probe_region": { "type": "string", "minLength": 1 },
+        "udp_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "agent_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "payload_bytes", "target_packet_rate", "measurement_duration_ms"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "payload_bytes": { "type": "integer", "minimum": 0, "maximum": 1200 },
+        "target_packet_rate": { "type": "integer", "minimum": 1 },
+        "measurement_duration_ms": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "directional_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observer",
+        "packets_sent",
+        "packets_received",
+        "duplicates",
+        "out_of_order",
+        "loss_pct",
+        "jitter_ms_p50",
+        "jitter_ms_p95",
+        "throughput_kbps"
+      ],
+      "properties": {
+        "observer": { "enum": ["probe", "agent"] },
+        "packets_sent": { "$ref": "#/$defs/nullable_non_negative_integer" },
+        "packets_received": { "$ref": "#/$defs/nullable_non_negative_integer" },
+        "duplicates": { "$ref": "#/$defs/nullable_non_negative_integer" },
+        "out_of_order": { "$ref": "#/$defs/nullable_non_negative_integer" },
+        "loss_pct": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "jitter_ms_p50": { "$ref": "#/$defs/nullable_non_negative_number" },
+        "jitter_ms_p95": { "$ref": "#/$defs/nullable_non_negative_number" },
+        "throughput_kbps": { "$ref": "#/$defs/nullable_non_negative_number" }
+      }
+    },
+    "unavailable_directional_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observer",
+        "packets_sent",
+        "packets_received",
+        "duplicates",
+        "out_of_order",
+        "loss_pct",
+        "jitter_ms_p50",
+        "jitter_ms_p95",
+        "throughput_kbps"
+      ],
+      "properties": {
+        "observer": { "enum": ["probe", "agent"] },
+        "packets_sent": { "const": null },
+        "packets_received": { "const": null },
+        "duplicates": { "const": null },
+        "out_of_order": { "const": null },
+        "loss_pct": { "const": null },
+        "jitter_ms_p50": { "const": null },
+        "jitter_ms_p95": { "const": null },
+        "throughput_kbps": { "const": null }
+      }
+    },
+    "rtt_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "mean", "p95"],
+      "properties": {
+        "min": { "$ref": "#/$defs/nullable_non_negative_number" },
+        "mean": { "$ref": "#/$defs/nullable_non_negative_number" },
+        "p95": { "$ref": "#/$defs/nullable_non_negative_number" }
+      }
+    },
+    "unavailable_rtt_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "mean", "p95"],
+      "properties": {
+        "min": { "const": null },
+        "mean": { "const": null },
+        "p95": { "const": null }
+      }
+    },
+    "reachability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "port", "status"],
+      "properties": {
+        "protocol": { "const": "udp" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "status": { "enum": ["bidirectional", "no_validated_response", "not_tested"] }
+      }
+    }
+  }
+}

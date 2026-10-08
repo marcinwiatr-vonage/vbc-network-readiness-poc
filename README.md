@@ -126,7 +126,7 @@ See [docs/threat-model.md](docs/threat-model.md) for abuse cases, controls, and 
 
 ## Project status
 
-**Milestone 1 — Local protocol foundation: in progress.** The Rust workspace, canonical authenticated packet codec, expiring source-bound registry, bounded 32-packet/two-second loopback agent↔probe exchange, and separate local CLI binaries exist. The loop silently rejects malformed, invalid-HMAC, unknown-session, expired, replayed, wrong-direction, and rebound traffic. Current work still needs complete negative-path codec coverage and registry-level terminal completion handling. AWS remains intentionally untouched.
+**Milestones 1–2 — Local foundation and metric correctness: in progress.** The Rust workspace, canonical authenticated packet codec, expiring source-bound registry, bounded 32-packet/two-second loopback agent↔probe exchange, and separate local CLI binaries exist. Pure shared calculators now cover independent directional packet accounting, loss, duplicates, reordering, inter-arrival jitter percentiles, RTT aggregates, and achieved payload throughput. A versioned result schema and deterministic completed/unavailable fixtures exist under `proto/`; the local CLI still emits only its Milestone 1 bootstrap summary and does not yet emit or ingest the full result contract. The report presentation mapping is defined in [docs/report-presentation.md](docs/report-presentation.md), but no web report page is implemented yet. AWS remains intentionally untouched.
 
 The authoritative delivery sequence is [ROADMAP.md](ROADMAP.md).
 
@@ -143,7 +143,11 @@ The authoritative delivery sequence is [ROADMAP.md](ROADMAP.md).
 │   ├── architecture.md
 │   ├── metrics.md
 │   ├── report-contract.md
+│   ├── report-presentation.md
 │   └── threat-model.md
+├── proto/
+│   ├── fixtures/              # Deterministic result-contract examples
+│   └── result.schema.json     # JSON Schema draft 2020-12, report v1
 ├── infra/terraform/
 ├── .github/workflows/
 ├── AGENTS.md

@@ -1,0 +1,45 @@
+{
+  "report_schema_version": 1,
+  "protocol_version": 2,
+  "test_id": "102132435465768798a9bacbdcedfe0f",
+  "status": "COMPLETED",
+  "started_at": "2026-09-24T18:01:00Z",
+  "ended_at": "2026-09-24T18:01:01Z",
+  "environment": {
+    "connection_type": "wifi",
+    "probe_id": "local-1",
+    "probe_region": "local",
+    "udp_port": 10000,
+    "agent_version": "0.1.0"
+  },
+  "profile": {
+    "name": "udp-baseline-v1",
+    "payload_bytes": 172,
+    "target_packet_rate": 4,
+    "measurement_duration_ms": 1000
+  },
+  "upstream": {
+    "observer": "probe",
+    "packets_sent": 4,
+    "packets_received": 3,
+    "duplicates": 1,
+    "out_of_order": 1,
+    "loss_pct": 25.0,
+    "jitter_ms_p50": 2.0,
+    "jitter_ms_p95": 8.0,
+    "throughput_kbps": 4.128
+  },
+  "downstream": {
+    "observer": "agent",
+    "packets_sent": 4,
+    "packets_received": 4,
+    "duplicates": 0,
+    "out_of_order": 0,
+    "loss_pct": 0.0,
+    "jitter_ms_p50": 0.3,
+    "jitter_ms_p95": 0.5,
+    "throughput_kbps": 5.504
+  },
+  "rtt_ms": { "min": 12.0, "mean": 15.0, "p95": 21.0 },
+  "reachability": { "protocol": "udp", "port": 10000, "status": "bidirectional" }
+}
